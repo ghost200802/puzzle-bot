@@ -4,7 +4,7 @@ import yaml
 from PIL import Image
 from typing import List, Tuple
 
-import util, sides
+from common import sides, util
 
 
 # How much error to tolerate when simplifying the shape

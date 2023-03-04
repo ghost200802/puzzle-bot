@@ -3,11 +3,7 @@ import os
 import time
 import multiprocessing
 
-import connect
-import segment
-import vector
-import util
-import board
+from common import board, connect, segment, util, vector
 
 
 INPUT_DIR = '0_input'

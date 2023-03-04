@@ -1,6 +1,7 @@
 import math
-import util
 from typing import List, Tuple
+
+from common import util
 
 # Two sides from different pieces "fit" if they are within this threshold (1.0 = perfect)
 SIDE_MAX_ERROR_TO_MATCH = 0.12

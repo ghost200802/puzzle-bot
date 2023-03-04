@@ -3,8 +3,7 @@ import yaml
 from typing import List, Tuple
 import multiprocessing
 
-import pieces
-import sides
+from common import pieces, sides
 
 
 SOLUTION = [

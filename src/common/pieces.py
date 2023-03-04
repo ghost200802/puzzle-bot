@@ -1,7 +1,7 @@
 import os
 import yaml
 
-import sides
+from common import sides
 
 class Piece(object):
     @staticmethod

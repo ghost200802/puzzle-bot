@@ -1,25 +1,36 @@
-import math
-import util
 from PIL import Image
 from typing import List, Tuple
 
+from common import util
 
-DARK_BG = False
+
 SEG_THRESH = (190*3)
 SCALE_BY = 0.15
 
 
-def segment(filename, output_path=None):
-    rgb_pixels, width, height = _load(filename)
-    bw_pixels = _segment(rgb_pixels, width, height)
-    width, height = _clean_and_crop(bw_pixels, width, height)
+def segment(filename, output_path=None, scale_by=SCALE_BY,
+            threshold=SEG_THRESH, clean_and_crop=True):
+    """
+    Extracts a darker puzzle piece from a bright background
+    Removes dust and debris from the image
+    Scales the binary image by the provided factor
+
+    Pixel values of 1 = puzzle piece
+    Pixel values of 0 = background
+
+    If an output path is provided, this function saves the resulting bitmap
+    Returns the pixels and dimensions
+    """
+    rgb_pixels, width, height = _load(filename, scale_by)
+    bw_pixels = _segment(rgb_pixels, width, height, threshold)
+    if clean_and_crop:
+        width, height = _clean_and_crop(bw_pixels, width, height)
     if output_path:
         _save(output_path, bw_pixels, width, height)
-    else:
-        return (bw_pixels, width, height)
+    return (bw_pixels, width, height)
 
 
-def _load(filename) -> List[Tuple[int, int, int]]:
+def _load(filename, scale_by) -> List[Tuple[int, int, int]]:
     """
     Loads an image file and returns a list of pixels, where each pixel is a tuple of (r, g, b) values
     """
@@ -27,8 +38,8 @@ def _load(filename) -> List[Tuple[int, int, int]]:
         width, height = img.size
 
         # resize to a maximum dimension
-        width = round(SCALE_BY * width)
-        height = round(SCALE_BY * height)
+        width = round(scale_by * width)
+        height = round(scale_by * height)
         img = img.resize((width, height))
 
         rgb_pixels = list(img.getdata())
@@ -36,7 +47,7 @@ def _load(filename) -> List[Tuple[int, int, int]]:
     return rgb_pixels, width, height
 
 
-def _segment(rgb_pixels, width, height) -> None:
+def _segment(rgb_pixels, width, height, threshold) -> None:
     """
     Segments the image into black and white pixels
     White is a part of the puzzle piece
@@ -51,11 +62,8 @@ def _segment(rgb_pixels, width, height) -> None:
         if y >= len(bw_pixels):
             bw_pixels.append([])
         row = bw_pixels[y]
-        sum = pixel_r + pixel_g + pixel_b
-        if (DARK_BG and sum < SEG_THRESH) or (not DARK_BG and sum > SEG_THRESH):
-            row.append(0)
-        else:
-            row.append(1)
+        brightness = 0 if (pixel_r + pixel_g + pixel_b) > threshold else 1
+        row.append(brightness)
         bw_pixels[y] = row
 
     return bw_pixels
