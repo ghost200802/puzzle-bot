@@ -4,3 +4,4 @@
 /data
 __pycache__
 *.o
+/example_data
