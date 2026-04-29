@@ -5,6 +5,7 @@ import os
 from typing import List
 import numpy as np
 import pathlib
+import cv2
 
 from common import sides, util
 from common.config import *
@@ -30,6 +31,48 @@ EDGE_WIDTH_MIN_RATIO = 0.4
 # scale pixel offsets depending on how big the BMPs are
 # 1.0 is tuned for around 100 pixels wide
 SCALAR = 9.45
+
+
+def _serialize_color_features(features):
+    """
+    Recursively convert color features dict to JSON-serializable types.
+    """
+    result = {}
+    for k, v in features.items():
+        if isinstance(v, np.ndarray):
+            result[k] = v.tolist()
+        elif isinstance(v, dict):
+            result[k] = _serialize_color_features(v)
+        elif isinstance(v, (list, tuple)):
+            converted = []
+            for item in v:
+                if isinstance(item, np.ndarray):
+                    converted.append(item.tolist())
+                elif isinstance(item, dict):
+                    converted.append(_serialize_color_features(item))
+                else:
+                    converted.append(item)
+            result[k] = converted
+        else:
+            result[k] = v
+    return result
+
+
+def _extract_color_features_basic(color_image, mask):
+    """
+    Extract basic color features from a piece's color image.
+    """
+    features = {}
+    piece_pixels = color_image[mask == 1]
+    if len(piece_pixels) > 0:
+        features['center_color'] = np.mean(piece_pixels, axis=0).tolist()
+        hsv = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
+        features['overall_histogram'] = {
+            'h': cv2.calcHist([hsv], [0], mask * 255, [36], [0, 180]),
+            's': cv2.calcHist([hsv], [1], mask * 255, [32], [0, 256]),
+            'v': cv2.calcHist([hsv], [2], mask * 255, [32], [0, 256]),
+        }
+    return features
 
 
 def load_and_vectorize(args):
@@ -144,7 +187,7 @@ class Vector(object):
         if width > MAX_PIECE_DIMENSIONS[0] or height > MAX_PIECE_DIMENSIONS[1]:
             raise Exception(f"!!!!!!!!!!\nPiece @ {id} {filename} is too large: {width}x{height} - are two pieces touching?")
 
-        v = Vector(pixels=binary_pixels, width=width, height=height, id=id, filename=filename)
+        v = Vector(pixels=binary_pixels, width=width, height=height, id=id, filename=pathlib.Path(filename))
         return v
 
     def __init__(self, pixels, width, height, id, filename=None) -> None:
@@ -157,7 +200,7 @@ class Vector(object):
         self.corners = []
         self.filename = filename
 
-    def process(self, output_path=None, metadata={}, photo_space_position=(0, 0), scale_factor=1.0, render=False):
+    def process(self, output_path=None, metadata={}, photo_space_position=(0, 0), scale_factor=1.0, render=False, color_image=None):
         print(f"> Vectorizing piece {self.id}")
         self.find_border_raster()
         self.vectorize()
@@ -173,6 +216,13 @@ class Vector(object):
 
         if render:
             self.render()
+
+        # Extract color features if a color image is provided (phone mode)
+        if color_image is not None:
+            self.color_image = color_image
+            mask = self.pixels.astype(np.uint8)
+            if mask.shape[:2] == color_image.shape[:2]:
+                self.color_features = _extract_color_features_basic(color_image, mask)
 
         # find the incenter of the piece in the space of the un-scaled original photo
         photo_space_incenter = (photo_space_position[0] + (self.incenter[0] / scale_factor),
@@ -246,6 +296,18 @@ class Vector(object):
             metadata['incenter'] = list(self.incenter)
             with open(side_path, 'w') as f:
                 f.write(json.dumps(metadata))
+
+        # Save color features if available (phone mode)
+        if hasattr(self, 'color_features'):
+            color_path = pathlib.Path(output_path).joinpath(f"color_features_{self.id}.json")
+            cf = _serialize_color_features(self.color_features)
+            with open(color_path, 'w') as f:
+                json.dump(cf, f)
+
+        # Save color image if available (phone mode)
+        if hasattr(self, 'color_image') and self.color_image is not None:
+            color_save_path = pathlib.Path(output_path).joinpath(f"color_{self.id}.png")
+            cv2.imwrite(str(color_save_path), self.color_image)
 
     def find_border_raster(self) -> None:
         # Ensure pixels is a numpy array

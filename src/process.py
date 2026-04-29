@@ -1,34 +1,208 @@
 """
-Processes photographs of pieces into digitzed piece data
+Processes photographs of pieces into digitized piece data.
+
+Supports two modes:
+  - 'phone': mobile phone photo pipeline
+  - 'robot': original robot-based pipeline (preserved for compatibility)
 """
 
 import os
+import sys
 import time
 import multiprocessing
 import re
 import pathlib
 import json
 
-from common import bmp, extract, util, vector, dedupe
-from common.config import *
+import numpy as np
+
+from common.config import (
+    MODE, PUZZLE_WIDTH, PUZZLE_HEIGHT,
+    PHOTOS_DIR, PHOTO_BMP_DIR, SEGMENT_DIR, VECTOR_DIR, DEDUPED_DIR,
+    CONNECTIVITY_DIR, SOLUTION_DIR, TIGHTNESS_DIR,
+    MIN_PIECE_AREA, MAX_PIECE_DIMENSIONS, CROP_TOP_RIGHT_BOTTOM_LEFT,
+    PHONE_TARGET_PIECE_SIZE,
+)
+
+if MODE == 'phone':
+    from common import preprocess, segment_phone, extract as phone_extract
+    from common.find_islands import save_island_as_bmp
+    from common import vector, dedupe
+else:
+    from common import bmp, extract, util, vector, dedupe
 
 
-def batch_process_photos(path, serialize, robot_states, id=None, start_at_step=0, stop_before_step=3):
+def batch_process_photos(path, serialize=False, robot_states=None,
+                         id=None, start_at_step=0, stop_before_step=10,
+                         puzzle_width=None, puzzle_height=None,
+                         segmentation_method='adaptive'):
     """
-    Given a path to a working directory that contains a 0_input subdirectory full of photos
-    Batch processes them into digital puzzle piece information
-
-    robot_states: a dictionary of photo filenames to robot states
-    start_at_step: the step to start processing at
-    stop_before_step: the step to stop processing at
-    id: only process the photo with this ID
+    Main processing entry point.
+    Dispatches to phone or robot mode based on config.
     """
+    if MODE == 'phone':
+        return _batch_process_phone(
+            path, serialize=serialize, id=id,
+            start_at_step=start_at_step, stop_before_step=stop_before_step,
+            puzzle_width=puzzle_width, puzzle_height=puzzle_height,
+            segmentation_method=segmentation_method,
+        )
+    else:
+        return _batch_process_robot(
+            path, serialize=serialize, robot_states=robot_states,
+            id=id, start_at_step=start_at_step,
+            stop_before_step=stop_before_step,
+        )
+
+
+# --- Phone mode pipeline ---
+
+def _batch_process_phone(path, serialize=False, id=None,
+                         start_at_step=0, stop_before_step=10,
+                         puzzle_width=None, puzzle_height=None,
+                         segmentation_method='adaptive'):
+    """
+    Phone mode pipeline:
+      Step 0: Preprocess photos (EXIF rotation, color normalization)
+      Step 1: Segment photos (adaptive threshold)
+      Step 2: Extract pieces (multi-piece per photo)
+      Step 3: Vectorize pieces
+      Step 4: Deduplicate
+    """
+    path = pathlib.Path(path)
+    photos_dir = path.joinpath(PHOTOS_DIR)
+    preprocessed_dir = path.joinpath('1_preprocessed')
+    vector_dir = path.joinpath(VECTOR_DIR)
+    deduped_dir = path.joinpath(DEDUPED_DIR)
+
+    all_pieces = []
+    piece_id_counter = 1
+
+    if start_at_step <= 0 and stop_before_step > 0:
+        print(f"\n### 0 - Preprocessing phone photos ###\n")
+        preprocessed_dir.mkdir(parents=True, exist_ok=True)
+
+    photo_files = sorted([
+        f for f in os.listdir(photos_dir)
+        if f.lower().endswith(('.jpg', '.jpeg', '.png'))
+    ])
+    if id:
+        photo_files = [f for f in photo_files if id in f]
+
+    for photo_file in photo_files:
+        photo_path = str(photos_dir.joinpath(photo_file))
+        photo_id = os.path.splitext(photo_file)[0]
+        print(f"\nProcessing photo: {photo_file}")
+
+        # Step 0-1: Preprocess and segment
+        if start_at_step <= 0:
+            bgr, gray = preprocess.preprocess_phone_photo(photo_path)
+            np.save(str(preprocessed_dir.joinpath(f'{photo_id}_gray.npy')), gray)
+            np.save(str(preprocessed_dir.joinpath(f'{photo_id}_bgr.npy')), bgr)
+        else:
+            gray = np.load(str(preprocessed_dir.joinpath(f'{photo_id}_gray.npy')))
+            bgr = np.load(str(preprocessed_dir.joinpath(f'{photo_id}_bgr.npy')))
+
+        if start_at_step <= 1 and stop_before_step > 1:
+            binary = segment_phone.segment_photo(gray, bgr=bgr,
+                                                  method=segmentation_method)
+            np.save(str(preprocessed_dir.joinpath(f'{photo_id}_binary.npy')), binary)
+        else:
+            binary = np.load(str(preprocessed_dir.joinpath(f'{photo_id}_binary.npy')))
+
+        # Step 2: Extract pieces
+        if start_at_step <= 2 and stop_before_step > 2:
+            pieces = phone_extract.extract_pieces_from_segmented(
+                binary, bgr, photo_id
+            )
+            for piece in pieces:
+                piece_binary_rescaled, piece_color_rescaled, _ = \
+                    preprocess.normalize_piece_size(
+                        piece.binary, piece.color,
+                        target_size=PHONE_TARGET_PIECE_SIZE
+                    )
+                piece.binary = piece_binary_rescaled
+                piece.color = piece_color_rescaled
+                all_pieces.append((piece_id_counter, piece))
+                piece_id_counter += 1
+
+    # Step 3: Vectorize
+    if start_at_step <= 3 and stop_before_step > 3 and all_pieces:
+        print(f"\n### 3 - Vectorizing {len(all_pieces)} pieces ###\n")
+        vector_dir.mkdir(parents=True, exist_ok=True)
+
+        args = []
+        for pid, piece_data in all_pieces:
+            if hasattr(piece_data, 'binary'):
+                bmp_data = piece_data.binary
+            else:
+                bmp_data = piece_data
+
+            h, w = bmp_data.shape
+            bmp_path = str(vector_dir.joinpath(f'piece_{pid}.bmp'))
+            save_island_as_bmp(bmp_data, bmp_path)
+
+            metadata = {
+                'original_photo_name': getattr(piece_data, 'photo_id', f'piece_{pid}'),
+                'photo_space_origin': getattr(piece_data, 'origin', (0, 0)),
+                'photo_space_centroid': [w // 2, h // 2],
+                'photo_width': w,
+                'photo_height': h,
+                'is_complete': getattr(piece_data, 'is_complete', True),
+            }
+            args.append([bmp_path, pid, str(vector_dir), metadata,
+                        (0, 0), 1.0, False])
+
+        if serialize:
+            for arg in args:
+                try:
+                    vector.load_and_vectorize(arg)
+                except Exception as e:
+                    print(f"Error vectorizing piece {arg[1]}: {e}")
+        else:
+            with multiprocessing.Pool(processes=os.cpu_count()) as pool:
+                results = pool.map(_safe_vectorize, args)
+                for r in results:
+                    if r is not None:
+                        print(f"  Vectorized piece {r}")
+
+    # Step 4: Deduplicate
+    if start_at_step <= 4 and stop_before_step > 4:
+        print(f"\n### 4 - Deduplicating ###\n")
+        deduped_dir.mkdir(parents=True, exist_ok=True)
+        count = dedupe.deduplicate_phone(str(vector_dir), str(deduped_dir))
+        if puzzle_width and puzzle_height:
+            expected = puzzle_width * puzzle_height
+            if count > expected:
+                print(f"Warning: expected {expected} pieces but got {count}")
+            elif count < expected:
+                print(f"Warning: expected {expected} pieces but only got {count}. "
+                      f"Missing {expected - count} pieces.")
+
+    return all_pieces
+
+
+def _safe_vectorize(args):
+    try:
+        vector.load_and_vectorize(args)
+        return args[1]
+    except Exception as e:
+        print(f"Error vectorizing piece {args[1]}: {e}")
+        return None
+
+
+# --- Robot mode pipeline (preserved for compatibility) ---
+
+def _batch_process_robot(path, serialize, robot_states, id,
+                         start_at_step, stop_before_step):
+    """Original robot mode pipeline."""
+    from common import util
 
     if start_at_step <= 1 and stop_before_step > 1:
         width, height, scale_factor = _bmp_all(
-            input_path = pathlib.Path(path).joinpath(PHOTOS_DIR),
-            output_path = pathlib.Path(path).joinpath(PHOTO_BMP_DIR),
-            id = id
+            input_path=pathlib.Path(path).joinpath(PHOTOS_DIR),
+            output_path=pathlib.Path(path).joinpath(PHOTO_BMP_DIR),
+            id=id
         )
     else:
         # we'll need realistic data when skipping, so do the minimum amount of work

@@ -1,0 +1,8 @@
+numpy>=1.21
+Pillow>=9.0
+scipy>=1.7
+shapely>=1.8
+opencv-python>=4.5
+imagehash>=4.3
+scikit-image>=0.19
+pytest>=7.0

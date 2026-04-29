@@ -1,6 +1,16 @@
 """
 Common configuration for the puzzle bot
+
+Supports two modes:
+  - 'robot': original robot-based puzzle solver
+  - 'phone': mobile phone photo-based puzzle assistant
 """
+
+import os
+
+
+# Operating mode: 'phone' (default) or 'robot'
+MODE = os.environ.get('PUZZLE_MODE', 'phone')
 
 
 # dimensions for the puzzle you're solving
@@ -49,3 +59,20 @@ SOLUTION_DIR = '6_solution'
 
 # Step 7 adjusts the tightness of the solved puzzle: how much breathing room do pieces need to actually click together?
 TIGHTNESS_DIR = '7_tightness'
+
+
+# Phone mode parameters (used when MODE == 'phone')
+if MODE == 'phone':
+    # Preprocessing
+    PHONE_BLUR_KERNEL = 5             # Gaussian blur kernel size for segmentation
+    PHONE_MORPH_KERNEL = 5            # Morphological operations kernel size
+    PHONE_ADAPTIVE_BLOCK_SIZE = 51    # Adaptive threshold block size (must be odd)
+    PHONE_ADAPTIVE_C = 10             # Adaptive threshold constant subtracted from mean
+    PHONE_MIN_PIECE_AREA_RATIO = 0.005  # Minimum piece area as ratio of image area
+    PHONE_TARGET_PIECE_SIZE = 500     # Target size for piece normalization
+    # Deduplication
+    PHONE_HASH_THRESHOLD = 15         # Perceptual hash distance threshold
+    PHONE_DUPLICATE_GEOMETRIC_THRESHOLD = 2.2  # Geometric similarity threshold for dedup
+    # Segmentation
+    PHONE_BG_BRIGHTNESS_THRESHOLD = 128  # Brightness threshold for background detection
+    PHONE_BORDER_RATIO_FOR_BG_DETECT = 0.1  # Border ratio for background sampling

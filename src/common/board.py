@@ -163,12 +163,17 @@ class Board(object):
         return self._board[y][x]
 
 
-def build(connectivity=None, input_path=None, output_path=None):
+def build(connectivity=None, input_path=None, output_path=None,
+          puzzle_width=None, puzzle_height=None):
     """
     Builds the puzzle
     Takes in either a path to a directory that contains the connectivity graph, or the connectivity graph itself
     TODO: somehow pass the output along
     """
+    # Allow overriding puzzle dimensions (for phone mode)
+    pw = puzzle_width or PUZZLE_WIDTH
+    ph = puzzle_height or PUZZLE_HEIGHT
+
     if connectivity is None:
         print("> Loading connectivity graph...")
         with open(os.path.join(input_path, 'connectivity.json'), 'r') as f:
@@ -187,7 +192,7 @@ def build(connectivity=None, input_path=None, output_path=None):
 
     corners = []
     edges = []
-    edge_length = 2 * (PUZZLE_WIDTH + PUZZLE_HEIGHT) - 4
+    edge_length = 2 * (pw + ph) - 4
     for piece_id, neighbors in ps.items():
         edge_count = sum([1 for n in neighbors if len(n) == 0])
         if edge_count > 0:
@@ -216,7 +221,8 @@ def build(connectivity=None, input_path=None, output_path=None):
 
     for i in range(0, 4):
         try:
-            solution = build_from_corner(ps, start_piece_id=corners[i], edge_length=edge_length)
+            solution = build_from_corner(ps, start_piece_id=corners[i], edge_length=edge_length,
+                                         puzzle_width=pw, puzzle_height=ph)
         except Exception as e:
             print(f"Failed to build from corner {i}: {e}")
             continue
@@ -227,11 +233,16 @@ def build(connectivity=None, input_path=None, output_path=None):
         raise Exception("Failed to solve")
     return solution
 
-def build_from_corner(ps, start_piece_id, edge_length):
+def build_from_corner(ps, start_piece_id, edge_length,
+                      puzzle_width=None, puzzle_height=None):
+    # Allow overriding puzzle dimensions (for phone mode)
+    pw = puzzle_width or PUZZLE_WIDTH
+    ph = puzzle_height or PUZZLE_HEIGHT
+
     print(f"\n===============================\nBuilding from corner {start_piece_id}...")
     start_piece_fits = ps[start_piece_id]
     start_orientation = _orient_start_corner_to_top_left(start_piece_fits)
-    board = Board(width=PUZZLE_WIDTH, height=PUZZLE_HEIGHT)
+    board = Board(width=pw, height=ph)
 
     x, y = (0, 0)
     board.place(start_piece_id, start_piece_fits, x, y, start_orientation)
@@ -256,8 +267,8 @@ def build_from_corner(ps, start_piece_id, edge_length):
             if (iteration > MAX_ITERATIONS_TO_FIND_BORDER and longest < edge_length) or iteration > MAX_ITERATIONS:
                 raise Exception("Too many iterations, I think we chose the wrong corner")
 
-        if board.placed_count == PUZZLE_WIDTH * PUZZLE_HEIGHT:
-            print(f"Placed {PUZZLE_WIDTH * PUZZLE_HEIGHT} pieces in {iteration} iterations")
+        if board.placed_count == pw * ph:
+            print(f"Placed {pw * ph} pieces in {iteration} iterations")
             break
         elif board.placed_count > longest:
             longest = board.placed_count
@@ -284,7 +295,7 @@ def build_from_corner(ps, start_piece_id, edge_length):
                 data = [next_board, neighbor_piece_id, neighbor_orientation, next_x, next_y, next_direction]
                 heapq.heappush(priority_q, (error, data))
 
-    if board.placed_count == PUZZLE_WIDTH * PUZZLE_HEIGHT:
+    if board.placed_count == pw * ph:
         print(f"Found solution after {iteration} iterations!")
         print(board)
         return board
