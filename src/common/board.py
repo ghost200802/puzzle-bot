@@ -164,7 +164,7 @@ class Board(object):
 
 
 def build(connectivity=None, input_path=None, output_path=None,
-          puzzle_width=None, puzzle_height=None):
+          puzzle_width=None, puzzle_height=None, piece_edge_info=None):
     """
     Builds the puzzle
     Takes in either a path to a directory that contains the connectivity graph, or the connectivity graph itself
@@ -194,7 +194,11 @@ def build(connectivity=None, input_path=None, output_path=None,
     edges = []
     edge_length = 2 * (pw + ph) - 4
     for piece_id, neighbors in ps.items():
-        edge_count = sum([1 for n in neighbors if len(n) == 0])
+        if piece_edge_info and piece_id in piece_edge_info:
+            edge_flags = piece_edge_info[piece_id]
+            edge_count = sum(1 for f in edge_flags if f)
+        else:
+            edge_count = sum([1 for n in neighbors if len(n) == 0])
         if edge_count > 0:
             edges.append(piece_id)
             if edge_count > 1:

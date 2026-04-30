@@ -13,6 +13,7 @@ import sys
 import json
 import time
 import shutil
+import math
 import numpy as np
 import cv2
 from PIL import Image
@@ -29,7 +30,7 @@ from common import vector, dedupe
 
 INPUT_IMAGE = 'input/puzzles/1.png'
 OUTPUT_DIR = 'output/puzzle_run'
-TARGET_PIECE_SIZE = 1000
+TARGET_PIECE_SIZE = 945
 
 
 def segment_and_prepare(image_path, target_size=TARGET_PIECE_SIZE):
@@ -234,25 +235,33 @@ def step4_connectivity(output_dir):
     from common import connect
     connectivity = connect.build(deduped_dir, conn_dir)
 
+    vector_dir = os.path.join(output_dir, VECTOR_DIR)
+    piece_edge_info = {}
     corners = 0
     edges = 0
     for piece_id, piece_data in connectivity.items():
-        fits = piece_data if isinstance(piece_data, list) else piece_data.get('fits', piece_data)
-        edge_sides = 0
-        if isinstance(fits, (list, tuple)):
-            for side_fits in fits:
-                if len(side_fits) == 0:
-                    edge_sides += 1
-        if edge_sides >= 2:
+        pid = int(piece_id)
+        edge_flags = []
+        for si in range(4):
+            json_path = os.path.join(vector_dir, f'side_{pid}_{si}.json')
+            try:
+                with open(json_path) as f:
+                    side_data = json.load(f)
+                edge_flags.append(side_data.get('is_edge', False))
+            except:
+                edge_flags.append(False)
+        piece_edge_info[pid] = edge_flags
+        edge_count = sum(edge_flags)
+        if edge_count >= 2:
             corners += 1
-        elif edge_sides >= 1:
+        elif edge_count >= 1:
             edges += 1
 
     print(f"Connectivity: {len(connectivity)} pieces, {corners} corners, {edges} edges")
-    return connectivity
+    return connectivity, corners, edges, piece_edge_info
 
 
-def step5_solve(output_dir, puzzle_width, puzzle_height):
+def step5_solve(output_dir, puzzle_width, puzzle_height, piece_edge_info=None):
     print("\n" + "=" * 60)
     print("STEP 5: Solving puzzle")
     print("=" * 60)
@@ -271,6 +280,7 @@ def step5_solve(output_dir, puzzle_width, puzzle_height):
             output_path=sol_dir,
             puzzle_width=puzzle_width,
             puzzle_height=puzzle_height,
+            piece_edge_info=piece_edge_info,
         )
         print("\n*** PUZZLE SOLVED! ***")
         print(puzzle)
@@ -284,6 +294,37 @@ def step5_solve(output_dir, puzzle_width, puzzle_height):
         import traceback
         traceback.print_exc()
         return None
+
+
+def infer_dimensions(total, n_corners, n_edges):
+    """
+    Infer puzzle W x H from connectivity stats.
+    Uses: perimeter = 2*(W+H)-4 = n_edges, total ≈ W*H
+    """
+    sum_wh = (n_edges + 4) / 2.0
+    candidates = []
+    for w in range(2, total + 1):
+        if total % w == 0:
+            h = total // w
+            perim = 2 * (w + h) - 4
+            if perim == n_edges:
+                candidates.append((w, h, 0))
+            elif abs(perim - n_edges) <= 2:
+                candidates.append((max(w, h), min(w, h), abs(perim - n_edges)))
+        h_up = (total + w - 1) // w
+        if h_up >= 2:
+            perim = 2 * (w + h_up) - 4
+            if perim == n_edges:
+                candidates.append((max(w, h_up), min(w, h_up), 0))
+            elif abs(perim - n_edges) <= 2:
+                candidates.append((max(w, h_up), min(w, h_up), abs(perim - n_edges)))
+        if w * w > total * 2:
+            break
+    candidates.sort(key=lambda c: (c[2], abs(c[0] - c[1])))
+    if candidates:
+        return candidates[0][0], candidates[0][1]
+    s = int(math.sqrt(total))
+    return max(2, s), max(2, (total + s - 1) // s)
 
 
 def main():
@@ -310,12 +351,17 @@ def main():
         print("\nNo pieces after deduplication. Cannot continue.")
         return
 
-    connectivity = step4_connectivity(OUTPUT_DIR)
+    connectivity, n_corners, n_edges, piece_edge_info = step4_connectivity(OUTPUT_DIR)
     if not connectivity:
         print("\nNo connectivity data. Cannot continue.")
         return
 
-    puzzle = step5_solve(OUTPUT_DIR, n_cols, n_rows)
+    total_pieces = len(connectivity)
+    pw, ph = infer_dimensions(total_pieces, n_corners, n_edges)
+    print(f"\nInferred dimensions: {pw} x {ph} = {pw * ph} "
+          f"(actual: {total_pieces}, corners: {n_corners}, edges: {n_edges})")
+
+    puzzle = step5_solve(OUTPUT_DIR, pw, ph, piece_edge_info)
 
     duration = time.time() - start_time
     print(f"\n{'=' * 60}")

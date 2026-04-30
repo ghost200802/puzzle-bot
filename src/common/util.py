@@ -523,28 +523,44 @@ def midpoint_along_path(vertices, p1, p2) -> Tuple[int, int]:
     return min_v
 
 
-def average_of_angles(angles):
+def average_of_angles(angles, weights=None):
     angles = np.array(angles)
-    avg_x = np.mean(np.cos(angles))
-    avg_y = np.mean(np.sin(angles))
+    if weights is not None:
+        weights = np.array(weights)
+        weights = weights / np.sum(weights)
+        avg_x = np.sum(weights * np.cos(angles))
+        avg_y = np.sum(weights * np.sin(angles))
+    else:
+        avg_x = np.mean(np.cos(angles))
+        avg_y = np.mean(np.sin(angles))
 
     avg_angle = np.arctan2(avg_y, avg_x)
     return float(avg_angle)
 
 
-def angular_stdev(angles):
+def angular_stdev(angles, weights=None):
     angles = np.array(angles)
     unit_vectors_x = np.cos(angles)
     unit_vectors_y = np.sin(angles)
 
-    mean_x = np.mean(unit_vectors_x)
-    mean_y = np.mean(unit_vectors_y)
+    if weights is not None:
+        weights = np.array(weights)
+        weights = weights / np.sum(weights)
+        mean_x = np.sum(weights * unit_vectors_x)
+        mean_y = np.sum(weights * unit_vectors_y)
+    else:
+        mean_x = np.mean(unit_vectors_x)
+        mean_y = np.mean(unit_vectors_y)
     mean_angle = np.arctan2(mean_y, mean_x)
 
     angular_deviations = np.arctan2(np.sin(angles - mean_angle), np.cos(angles - mean_angle))
-    stdev = np.std(angular_deviations)
+    if weights is not None:
+        w = weights / np.sum(weights)
+        variance = np.sum(w * (angular_deviations - np.sum(w * angular_deviations)) ** 2)
+    else:
+        variance = np.var(angular_deviations)
 
-    return float(stdev)
+    return float(math.sqrt(variance))
 
 
 def curve_score(points, debug=False) -> float:
@@ -602,19 +618,94 @@ def curve_score(points, debug=False) -> float:
 
 def colinearity(from_point, to_points, debug=False) -> Tuple[float, float]:
     """
-    Given a point and a list of points, finds how "colinear" they are:
-     - the average angle between the point and the points
-     - the std dev of the angles
+    Given a point and a list of points along one spoke, finds:
+     - the average direction of the spoke (based on segment directions, not point-to-point angles)
+     - the std dev of the segment directions
+
+    Uses segment directions (between consecutive to_points) for the average,
+    weighted by straightness and distance so straight segments dominate.
     """
-    angles = [angle_between(from_point, to_point) for to_point in to_points]
-    avg = average_of_angles(angles)
-    std_dev = angular_stdev(angles)
+    n = len(to_points)
+    if n < 2:
+        return angle_between(from_point, to_points[0]) if n == 1 else 0.0, 0.0
+
+    seg_angles = []
+    seg_lengths = []
+    for k in range(1, n):
+        dx = float(to_points[k][0]) - float(to_points[k - 1][0])
+        dy = float(to_points[k][1]) - float(to_points[k - 1][1])
+        seg_angles.append(math.atan2(dy, dx))
+        seg_lengths.append(math.sqrt(dx * dx + dy * dy))
+
+    weights = _straightness_weights(to_points)
+    seg_weights = []
+    for k in range(len(seg_angles)):
+        w = (weights[k] + weights[k + 1]) / 2.0
+        seg_weights.append(w * seg_lengths[k])
+
+    avg = average_of_angles(seg_angles, seg_weights)
+    std_dev = angular_stdev(seg_angles, seg_weights)
     if debug:
         print("Colinearity:")
-        print(f"angles: {[round(a * 180/math.pi) for a in angles]}")
+        print(f"seg_angles: {[round(a * 180/math.pi) for a in seg_angles]}")
+        print(f"seg_weights: {[round(w, 3) for w in seg_weights]}")
         print(f"avg: {round(avg * 180/math.pi)}")
-        print(f"deltas: {[(angle - avg) ** 2 for angle in angles]} \t ==> stdev: {std_dev}")
     return avg, std_dev
+
+
+def _straightness_weights(points):
+    """
+    Compute weights for each point: straightness * segment_distance.
+    - straightness: points on straight segments get higher weight
+    - distance: each point's weight is multiplied by its adjacent segment
+      distance, so sparse straight areas dominate over dense curved areas
+    """
+    n = len(points)
+    if n < 3:
+        return [1.0] * n
+
+    seg_angles = []
+    for i in range(1, n):
+        dx = float(points[i][0]) - float(points[i - 1][0])
+        dy = float(points[i][1]) - float(points[i - 1][1])
+        seg_angles.append(math.atan2(dy, dx))
+
+    m = len(seg_angles)
+    straightness = [1.0] * n
+
+    skip = 2
+    for i in range(m):
+        j = i + skip
+        if j >= m:
+            j = m - 1
+        if j == i:
+            straightness[i] = 1.0
+            continue
+        change = abs(seg_angles[j] - seg_angles[i])
+        if change > math.pi:
+            change = 2 * math.pi - change
+        ratio = max(0.0, 1.0 - change / (math.pi / 3))
+        straightness[i] = ratio ** 6
+
+    for _ in range(2):
+        smoothed = list(straightness)
+        for i in range(1, n - 1):
+            smoothed[i] = 0.25 * straightness[i - 1] + 0.5 * straightness[i] + 0.25 * straightness[i + 1]
+        straightness = smoothed
+
+    dist = [1.0] * n
+    for i in range(n):
+        if i == 0:
+            d = math.sqrt(float(points[1][0] - points[0][0])**2 + float(points[1][1] - points[0][1])**2)
+        elif i == n - 1:
+            d = math.sqrt(float(points[n-1][0] - points[n-2][0])**2 + float(points[n-1][1] - points[n-2][1])**2)
+        else:
+            d1 = math.sqrt(float(points[i][0] - points[i-1][0])**2 + float(points[i][1] - points[i-1][1])**2)
+            d2 = math.sqrt(float(points[i+1][0] - points[i][0])**2 + float(points[i+1][1] - points[i][1])**2)
+            d = (d1 + d2) / 2.0
+        dist[i] = d
+
+    return [s * d for s, d in zip(straightness, dist)]
 
 
 def trendline(points):
@@ -653,11 +744,14 @@ def sublist_exists(lst, sub_lst):
     return sub_lst_str in lst_extended_str
 
 
-def slice(l: List, i: int, j: int) -> List:
+def slice(l: List, i: int, j: int, step: int = 1) -> List:
     """
     Grabs a slice from the list, from index i through j
     j can be lower than i, in which case the slice will "wrap" around the list
+    step controls sampling density (default=1 means every element)
     """
+    if step < 1:
+        step = 1
     if i < 0:
         i += len(l)
     if j < 0:
@@ -666,10 +760,11 @@ def slice(l: List, i: int, j: int) -> List:
         i -= len(l)
     while j >= len(l):
         j -= len(l)
-    if i < j:
-        return l[i:j + 1]
+    if i <= j:
+        indices = list(range(i, j + 1, step))
     else:
-        return l[i:] + l[:j + 1]
+        indices = list(range(i, len(l), step)) + list(range(0, j + 1, step))
+    return [l[idx] for idx in indices]
 
 
 def rotate_list(l, i):

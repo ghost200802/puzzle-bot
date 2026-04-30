@@ -100,27 +100,28 @@ def load_and_vectorize(args):
 
 class Candidate(object):
     @staticmethod
-    def from_vertex(vertices, i, centroid, debug=False, scalar=SCALAR):
+    def from_vertex(vertices, i, centroid, debug=False, scalar=SCALAR, angle_max_deg=None):
         i = i % len(vertices)
         v_i = vertices[i]
 
         if debug:
             print(f"\n\n\n!!!!!!!!!!!!!! {v_i} !!!!!!!!!!!!!!!\n")
 
-        # find the angle from i to the points before it (h), and i to the points after (j)
-        vec_offset = 1 if scalar < 2 else 2    # we start comparing to this many points away, as really short vectors have noisy angles
-        vec_len_for_stdev = round(8 * scalar)  # compare this many total points to see the curvature
-        vec_len_for_angle = round(3 * scalar)  # compare this many total points to see the width of the angle of this corner
-        vec_len_for_curve = round(9 * scalar)  # wrap around these spokes and see if they form a clean curve or not
+        max_angle_deg = angle_max_deg if angle_max_deg is not None else CORNER_MAX_ANGLE_DEG
+
+        vec_offset = 1 if scalar < 2 else 2
+        vec_len_for_stdev = round(8 * scalar)
+        stdev_step = max(1, round(0.75 * scalar))
+        vec_len_for_angle = round(3 * scalar)
+        vec_len_for_curve = round(9 * scalar)
 
         a_ih, _ = util.colinearity(from_point=vertices[i], to_points=util.slice(vertices, i-vec_len_for_angle-vec_offset, i-vec_offset-1))
         a_ij, _ = util.colinearity(from_point=vertices[i], to_points=util.slice(vertices, i+vec_offset+1, i+vec_len_for_angle+vec_offset))
+        a_ih = a_ih + math.pi
 
-        # extend out along the avg spoke direction
         p_h = (v_i[0] + 10 * math.cos(a_ih), v_i[1] + 10 * math.sin(a_ih))
         p_j = (v_i[0] + 10 * math.cos(a_ij), v_i[1] + 10 * math.sin(a_ij))
 
-        # how wide is the angle between the two legs?
         angle_hij = util.counterclockwise_angle_between_vectors(p_h, v_i, p_j)
 
         a_ic = util.angle_between(v_i, centroid)
@@ -129,18 +130,18 @@ class Candidate(object):
 
         is_pointed_toward_center = offset_from_center < angle_hij / 2
         if not is_pointed_toward_center and angle_hij < 90 * math.pi/180:
-            # for narrow corners, they might not be pointed directly toward the center but could still be close
             is_pointed_toward_center = abs(offset_from_center) <= (45 * math.pi/180)
-        is_valid_angle_width = angle_hij >= CORNER_MIN_ANGLE_DEG * math.pi/180 and angle_hij <= CORNER_MAX_ANGLE_DEG * math.pi/180
+        is_valid_angle_width = angle_hij >= CORNER_MIN_ANGLE_DEG * math.pi/180 and angle_hij <= max_angle_deg * math.pi/180
 
         if not is_pointed_toward_center or not is_valid_angle_width:
             if debug:
                 print(">>>>>> Skipping; not a valid candidate")
             return None
 
-        # see how straight the spokes are from this point, and what angle they jut out at
-        _, stdev_h = util.colinearity(from_point=vertices[i], to_points=util.slice(vertices, i-vec_len_for_stdev-vec_offset, i-vec_offset-1))
-        _, stdev_j = util.colinearity(from_point=vertices[i], to_points=util.slice(vertices, i+vec_offset+1, i+vec_len_for_stdev+vec_offset))
+        stdev_pts_h = util.slice(vertices, i-vec_len_for_stdev-vec_offset, i-vec_offset-1, step=stdev_step)
+        stdev_pts_j = util.slice(vertices, i+vec_offset+1, i+vec_len_for_stdev+vec_offset, step=stdev_step)
+        _, stdev_h = util.colinearity(from_point=vertices[i], to_points=stdev_pts_h)
+        _, stdev_j = util.colinearity(from_point=vertices[i], to_points=stdev_pts_j)
         stdev = stdev_h + stdev_j
 
         points_around = util.slice(vertices, i-vec_len_for_curve, i+vec_len_for_curve)
@@ -202,6 +203,55 @@ class Candidate(object):
             edge_penalty += 5.0 * (min_dist_to_edge - 0.05)
 
         return base_score + edge_penalty
+
+    def score_with_straight_edges(self, vertices, scalar, dim):
+        n = len(vertices)
+        i = self.i % n
+        step = max(1, round(scalar))
+        dim_val = float(dim)
+
+        def scan_direction(start, step_sign):
+            base_angle = None
+            cumulative_length = 0.0
+            j = start
+            straight_length = 0.0
+
+            for _ in range(200):
+                j = (j + step_sign * step) % n
+                j2 = (j + step_sign * step) % n
+                dx = float(vertices[j2][0]) - float(vertices[j][0])
+                dy = float(vertices[j2][1]) - float(vertices[j][1])
+                seg_angle = math.atan2(dy, dx)
+                seg_len = math.sqrt(dx * dx + dy * dy)
+                cumulative_length += seg_len
+
+                if base_angle is None:
+                    base_angle = seg_angle
+                    straight_length = cumulative_length
+                    continue
+
+                change = abs(seg_angle - base_angle)
+                if change > math.pi:
+                    change = 2 * math.pi - change
+
+                if change > 0.25:
+                    break
+                straight_length = cumulative_length
+
+            return straight_length, base_angle
+
+        fwd_len, fwd_angle = scan_direction(i, 1)
+        back_len, back_angle = scan_direction(i, -1)
+
+        angle_diff = abs(fwd_angle - back_angle)
+        if angle_diff > math.pi:
+            angle_diff = 2 * math.pi - angle_diff
+        interior_angle_deg = angle_diff * 180.0 / math.pi
+
+        angle_dev = abs(interior_angle_deg - 90.0) / 90.0
+        min_line_ratio = min(fwd_len, back_len) / dim_val if dim_val > 0 else 0
+
+        return 1.0 * angle_dev - 2.0 * min_line_ratio
 
     def __repr__(self) -> str:
         return f"Candidate(v={self.v}, i={self.i}, angle={round(self.angle * 180/math.pi, 1)}°, orientation offset={round(self.offset_from_center * 180/math.pi, 1)}°, midangle={round(self.midangle * 180/math.pi, 2)}°, stdev={self.stdev}, score={self.score()})"
@@ -456,9 +506,6 @@ class Vector(object):
         return min(xs), min(ys), max(xs), max(ys)
 
     def find_corner_candidates(self):
-        """
-        Finds corners by evaluating the score at each each point
-        """
         candidates = []
         bbox = self._get_bbox()
 
@@ -469,7 +516,6 @@ class Vector(object):
                 candidate = Candidate.from_vertex(self.vertices, i, self.centroid, debug=debug, scalar=self.scalar)
             except Exception as e:
                 print(f"Error while computing curve score for piece {self.id}: {e}")
-            curve_score = 0.0
 
             if not candidate or candidate.score() > 3.0:
                 if debug:
@@ -477,28 +523,96 @@ class Vector(object):
                 continue
             candidates.append(candidate)
 
+        edge_threshold = 0.10
+        relaxed_angle_max = 185
+        existing_indices = set(c.i for c in candidates)
+
+        for edge_dim, edge_side in [('x', 'min'), ('x', 'max'), ('y', 'min'), ('y', 'max')]:
+            if edge_dim == 'x':
+                if edge_side == 'min':
+                    extreme_val = min(v[0] for v in self.vertices)
+                else:
+                    extreme_val = max(v[0] for v in self.vertices)
+            else:
+                if edge_side == 'min':
+                    extreme_val = min(v[1] for v in self.vertices)
+                else:
+                    extreme_val = max(v[1] for v in self.vertices)
+
+            edge_wider = 0.15
+            has_edge_candidate = False
+            for c in candidates:
+                cx, cy = c.v
+                if edge_dim == 'x':
+                    d = abs(cx - extreme_val) / (bbox[2] - bbox[0])
+                else:
+                    d = abs(cy - extreme_val) / (bbox[3] - bbox[1])
+                if d <= edge_wider:
+                    has_edge_candidate = True
+                    break
+
+            if has_edge_candidate:
+                continue
+
+            edge_candidates = []
+            for i in range(len(self.vertices)):
+                if i in existing_indices:
+                    continue
+                x, y = self.vertices[i]
+                if edge_dim == 'x':
+                    dist = (x - bbox[0]) / (bbox[2] - bbox[0]) if edge_side == 'min' else (bbox[2] - x) / (bbox[2] - bbox[0])
+                else:
+                    dist = (y - bbox[1]) / (bbox[3] - bbox[1]) if edge_side == 'min' else (bbox[3] - y) / (bbox[3] - bbox[1])
+
+                if dist > edge_threshold:
+                    continue
+
+                candidate = None
+                try:
+                    candidate = Candidate.from_vertex(self.vertices, i, self.centroid, debug=False, scalar=self.scalar, angle_max_deg=relaxed_angle_max)
+                except Exception as e:
+                    continue
+
+                if candidate and candidate.score() <= 3.0:
+                    edge_candidates.append(candidate)
+                    existing_indices.add(i)
+
+            if edge_candidates:
+                edge_candidates.sort(key=lambda c: c.score())
+                best = edge_candidates[0]
+                candidates.append(best)
+
         return candidates
 
     def merge_nearby_candidates(self, candidates):
         """
-        If candidates are within a few indices of each other, merge them by choosing the one with the lowest score
+        If candidates are within a pixel distance threshold, merge by choosing the one with the lowest score.
+        Handles wrap-around (candidates near index 0 and max index).
         """
-        cs_by_i = sorted(candidates, key=lambda c: c.i)
-        j = 0
-        while j + 1 < len(cs_by_i):
-            c0 = cs_by_i[j]
-            c1 = cs_by_i[j + 1]
+        if len(candidates) <= 1:
+            return candidates
 
-            # if the two corners are close together, pick the one with the lower score
-            # then fast forward past this second candidate
-            if c1.i - c0.i <= 2 * self.scalar:
-                if c0.score() < c1.score():
-                    cs_by_i.remove(c1)
-                else:
-                    cs_by_i.remove(c0)
-            else:
-                j += 1
-        return cs_by_i
+        merge_dist_px = 5 * self.scalar
+
+        def pixel_dist(c0, c1):
+            return math.sqrt((c0.v[0] - c1.v[0]) ** 2 + (c0.v[1] - c1.v[1]) ** 2)
+
+        changed = True
+        while changed:
+            changed = False
+            for i in range(len(candidates)):
+                for j in range(i + 1, len(candidates)):
+                    if pixel_dist(candidates[i], candidates[j]) < merge_dist_px:
+                        if candidates[i].score() <= candidates[j].score():
+                            candidates.pop(j)
+                        else:
+                            candidates.pop(i)
+                        changed = True
+                        break
+                if changed:
+                    break
+
+        return candidates
 
     def select_best_corners(self, candidates):
         """
@@ -513,15 +627,43 @@ class Vector(object):
         candidates = list(set(candidates))
 
         bbox = self._get_bbox()
+        bw = bbox[2] - bbox[0]
+        bh = bbox[3] - bbox[1]
 
         def scored(c):
             return c.score_with_bbox(bbox[0], bbox[1], bbox[2], bbox[3])
 
-        # compute each corner's score, and only consider the n best corners
-        candidates = sorted(candidates, key=scored)[:12]
+        candidates_sorted = sorted(candidates, key=scored)
 
-        # for c in candidates:
-        #     print(c)
+        def get_edges(c):
+            x, y = c.v
+            dl = (x - bbox[0]) / bw
+            dr = (bbox[2] - x) / bw
+            dt = (y - bbox[1]) / bh
+            db = (bbox[3] - y) / bh
+            dists = [("left", dl), ("right", dr), ("top", dt), ("bottom", db)]
+            dists.sort(key=lambda t: t[1])
+            edges = [dists[0][0]]
+            if dists[1][1] < 0.35:
+                edges.append(dists[1][0])
+            return edges
+
+        edge_picks = {"left": [], "right": [], "top": [], "bottom": []}
+        seen_in = {"left": set(), "right": set(), "top": set(), "bottom": set()}
+        for c in candidates_sorted:
+            edges = get_edges(c)
+            for e in edges:
+                cid = id(c)
+                if cid not in seen_in[e]:
+                    edge_picks[e].append(c)
+                    seen_in[e].add(cid)
+
+        diverse_candidates = []
+        per_edge = 4
+        for e in ["left", "right", "top", "bottom"]:
+            diverse_candidates.extend(edge_picks[e][:per_edge])
+
+        candidates = list(dict((id(c), c) for c in diverse_candidates).values())
 
         if len(candidates) < 4:
             raise Exception(f"Expected at least 4 candidates, found {len(candidates)} on piece {self.id}")
@@ -602,16 +744,18 @@ class Vector(object):
             delta_angle_30 = util.compare_angles(angles[3], angles[0])
             if debug:
                 print(f" \t   Deltas: {round(delta_angle_01 * 180 / math.pi)}°, {round(delta_angle_12 * 180 / math.pi)}°, {round(delta_angle_23 * 180 / math.pi)}°, {round(delta_angle_30 * 180 / math.pi)}°")
-            score_01 = 0.3 * abs(delta_angle_01 - math.pi/2)
-            score_12 = 0.3 * abs(delta_angle_12 - math.pi/2)
-            score_23 = 0.3 * abs(delta_angle_23 - math.pi/2)
-            score_30 = 0.3 * abs(delta_angle_30 - math.pi/2)
+            max_deviation = 45 * math.pi / 180
+            score_01 = 0.5 * min(abs(delta_angle_01 - math.pi/2), max_deviation)
+            score_12 = 0.5 * min(abs(delta_angle_12 - math.pi/2), max_deviation)
+            score_23 = 0.5 * min(abs(delta_angle_23 - math.pi/2), max_deviation)
+            score_30 = 0.5 * min(abs(delta_angle_30 - math.pi/2), max_deviation)
             if debug:
                 print(f" \t   Penalties: {round(score_01, 2)}, {round(score_12, 2)}, {round(score_23, 2)}, {round(score_30, 2)}")
             score += score_01 + score_12 + score_23 + score_30
             if debug:
                 print(f"\t Score: {score}")
 
+            
             min_delta = min([delta_angle_01, delta_angle_12, delta_angle_23, delta_angle_30])
             if min_delta < 10 * math.pi/180:
                 score += 1.0 / (min_delta + 0.01)
@@ -672,7 +816,7 @@ class Vector(object):
             # - a gentle sloping curve (like the shape of a parenthesis)
             # - a gentle squiggle (like a sine wave)
             area = util.normalized_area_between_corners(vertices)
-            is_edge = bool(area < 0.75 * self.scalar)
+            is_edge = bool(area < 1.8 * self.scalar)
             side = sides.Side(piece_id=self.id, side_id=None, vertices=vertices, piece_center=self.centroid, is_edge=is_edge)
             self.sides.append(side)
 
