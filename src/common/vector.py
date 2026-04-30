@@ -171,38 +171,17 @@ class Candidate(object):
         self.curve_score = curve_score
 
     def score(self):
-        # lower score = better candidate for a corner
-        # we determine "worst" by a mix of:
-        # - how far from 90º the join angle is
-        # - how far from the center the corner "points": the midangle of the corner typically points quite close to the center of the piece
-        # - how non-straight the spokes are
-
-        # how much bigger are we than 90º?
-        # If we're less, then we're more likely to be a corner so we don't penalize for below 90º
         angle_error = max(0, self.angle - math.pi/2)
-        score = (0.7 * angle_error) + (0.4 * self.offset_from_center) + (11.0 * (self.stdev ** 2)) + (0.8 * self.curve_score)
+        penalty = 0.0
+        if angle_error > math.pi / 18:
+            penalty += 1.0 * (angle_error - math.pi / 18)
+        if angle_error > math.pi / 6:
+            penalty += 4.0 * (angle_error - math.pi / 6)
+        score = (0.7 * (angle_error + penalty)) + (0.4 * self.offset_from_center) + (5.0 * (self.stdev ** 2)) + (0.8 * self.curve_score)
         return score
 
     def score_with_bbox(self, bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y):
-        base_score = self.score()
-        x, y = self.v
-        bw = bbox_max_x - bbox_min_x
-        bh = bbox_max_y - bbox_min_y
-        if bw <= 0 or bh <= 0:
-            return base_score
-
-        dist_left = (x - bbox_min_x) / bw
-        dist_right = (bbox_max_x - x) / bw
-        dist_top = (y - bbox_min_y) / bh
-        dist_bottom = (bbox_max_y - y) / bh
-
-        min_dist_to_edge = min(dist_left, dist_right, dist_top, dist_bottom)
-
-        edge_penalty = 0.0
-        if min_dist_to_edge > 0.05:
-            edge_penalty += 5.0 * (min_dist_to_edge - 0.05)
-
-        return base_score + edge_penalty
+        return self.score()
 
     def score_with_straight_edges(self, vertices, scalar, dim):
         n = len(vertices)
