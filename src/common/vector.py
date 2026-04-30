@@ -182,6 +182,27 @@ class Candidate(object):
         score = (0.7 * angle_error) + (0.4 * self.offset_from_center) + (11.0 * (self.stdev ** 2)) + (0.8 * self.curve_score)
         return score
 
+    def score_with_bbox(self, bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y):
+        base_score = self.score()
+        x, y = self.v
+        bw = bbox_max_x - bbox_min_x
+        bh = bbox_max_y - bbox_min_y
+        if bw <= 0 or bh <= 0:
+            return base_score
+
+        dist_left = (x - bbox_min_x) / bw
+        dist_right = (bbox_max_x - x) / bw
+        dist_top = (y - bbox_min_y) / bh
+        dist_bottom = (bbox_max_y - y) / bh
+
+        min_dist_to_edge = min(dist_left, dist_right, dist_top, dist_bottom)
+
+        edge_penalty = 0.0
+        if min_dist_to_edge > 0.05:
+            edge_penalty += 5.0 * (min_dist_to_edge - 0.05)
+
+        return base_score + edge_penalty
+
     def __repr__(self) -> str:
         return f"Candidate(v={self.v}, i={self.i}, angle={round(self.angle * 180/math.pi, 1)}°, orientation offset={round(self.offset_from_center * 180/math.pi, 1)}°, midangle={round(self.midangle * 180/math.pi, 2)}°, stdev={self.stdev}, score={self.score()})"
 
@@ -429,14 +450,18 @@ class Vector(object):
         if len(self.corners) != 4:
             raise Exception(f"Expected 4 corners, found {len(self.corners)} on piece {self.id}")
 
+    def _get_bbox(self):
+        xs = [p[0] for p in self.vertices]
+        ys = [p[1] for p in self.vertices]
+        return min(xs), min(ys), max(xs), max(ys)
+
     def find_corner_candidates(self):
         """
         Finds corners by evaluating the score at each each point
         """
         candidates = []
+        bbox = self._get_bbox()
 
-        # to find a corner, we're going to compute the angle between 3 consecutive points
-        # if it is roughly 90º and pointed toward the center, it's a corner
         for i in range(len(self.vertices)):
             debug = self.vertices[i][1] in (2260, 1250)
             candidate = None
@@ -487,8 +512,13 @@ class Vector(object):
         # eliminate duplicates
         candidates = list(set(candidates))
 
+        bbox = self._get_bbox()
+
+        def scored(c):
+            return c.score_with_bbox(bbox[0], bbox[1], bbox[2], bbox[3])
+
         # compute each corner's score, and only consider the n best corners
-        candidates = sorted(candidates, key=lambda c: c.score())[:12]
+        candidates = sorted(candidates, key=scored)[:12]
 
         # for c in candidates:
         #     print(c)
@@ -504,7 +534,7 @@ class Vector(object):
             debug = (c0.v[1] == 6300)
 
             # first, start with the score of each individual corner
-            score = 1.2 * (c0.score() + c1.score())
+            score = 1.2 * (scored(c0) + scored(c1))
             if debug:
                 print("==========")
                 print(c0)

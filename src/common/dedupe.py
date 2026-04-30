@@ -246,10 +246,12 @@ def deduplicate_phone(input_path, output_path):
 
     # Load all pieces
     pieces_data = {}
+    piece_origins = {}
     for path in input_path.glob("side_*_0.json"):
         i = int(path.parts[-1].split('_')[1])
         piece_sides = []
         valid = True
+        origin = None
         for j in range(4):
             json_path = input_path.joinpath(f'side_{i}_{j}.json')
             try:
@@ -258,6 +260,8 @@ def deduplicate_phone(input_path, output_path):
                     if not data.get('vertices'):
                         valid = False
                         break
+                    if j == 0:
+                        origin = data.get('photo_space_origin')
                     side = sides.Side(
                         i, j, data['vertices'],
                         piece_center=data['piece_center'],
@@ -272,20 +276,37 @@ def deduplicate_phone(input_path, output_path):
                 break
         if valid and len(piece_sides) == 4:
             pieces_data[i] = piece_sides
+            if origin:
+                piece_origins[i] = origin
 
     if len(pieces_data) <= 1:
         for pid in pieces_data:
             _copy_piece_files(str(input_path), str(output_path), pid)
         return len(pieces_data)
 
+    has_origins = len(piece_origins) == len(pieces_data)
+
     # Find duplicate groups via geometric comparison
     dup_candidates = []
     ids = list(pieces_data.keys())
+    skipped_by_origin = 0
     for i, j in itertools.combinations(range(len(ids)), 2):
         id_a, id_b = ids[i], ids[j]
+
+        if has_origins and id_a in piece_origins and id_b in piece_origins:
+            oa, ob = piece_origins[id_a], piece_origins[id_b]
+            dist = math.sqrt((oa[0] - ob[0])**2 + (oa[1] - ob[1])**2)
+            if dist > DUPLICATE_CENTROID_DELTA_PX:
+                skipped_by_origin += 1
+                continue
+
         score = _compare(pieces_data[id_a], pieces_data[id_b])
         if score < PHONE_DUPLICATE_GEOMETRIC_THRESHOLD:
             dup_candidates.append((id_a, id_b, score))
+
+    if has_origins:
+        total_pairs = len(ids) * (len(ids) - 1) // 2
+        print(f"Dedup: origin filter skipped {skipped_by_origin}/{total_pairs} pairs")
 
     # Union-Find to group duplicates
     parent = {}
