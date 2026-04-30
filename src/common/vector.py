@@ -128,6 +128,20 @@ class Candidate(object):
         midangle = util.angle_between(v_i, util.midpoint(p_h, p_j))
         offset_from_center = util.compare_angles(midangle, a_ic)
 
+        def normalize_angle(a):
+            a = a % (2 * math.pi)
+            if a > math.pi:
+                a -= 2 * math.pi
+            return a
+
+        angle_h_signed = normalize_angle(a_ih - a_ic)
+        angle_j_signed = normalize_angle(a_ij - a_ic)
+
+        half_angle = angle_hij / 2
+        asymmetry = abs(angle_h_signed + angle_j_signed)
+        magnitude_dev = abs(abs(angle_h_signed) - half_angle) + abs(abs(angle_j_signed) - half_angle)
+        centroid_symmetry = asymmetry + magnitude_dev
+
         is_pointed_toward_center = offset_from_center < angle_hij / 2
         if not is_pointed_toward_center and angle_hij < 90 * math.pi/180:
             is_pointed_toward_center = abs(offset_from_center) <= (45 * math.pi/180)
@@ -147,7 +161,7 @@ class Candidate(object):
         points_around = util.slice(vertices, i-vec_len_for_curve, i+vec_len_for_curve)
         curve_score = util.curve_score(points=points_around, debug=debug)
 
-        candidate = Candidate(v=v_i, i=i, centroid=centroid, angular_width=angle_hij, offset_from_center=offset_from_center, midangle=midangle, stdev=stdev, curve_score=curve_score)
+        candidate = Candidate(v=v_i, i=i, centroid=centroid, angular_width=angle_hij, offset_from_center=offset_from_center, midangle=midangle, stdev=stdev, curve_score=curve_score, centroid_symmetry=centroid_symmetry)
         if debug:
             print(f"actually pointed toward center: {offset_from_center < angle_hij / 2}, pointed close enough toward center: {abs(offset_from_center) <= (55 * math.pi/180)}")
             print(f"stdev of spokes: {stdev} = {stdev_h} + {stdev_j}, {vec_len_for_stdev}px out")
@@ -160,7 +174,7 @@ class Candidate(object):
 
         return candidate
 
-    def __init__(self, v, i, centroid, angular_width=10000, offset_from_center=10000, stdev=10000, midangle=10000, curve_score=10000,):
+    def __init__(self, v, i, centroid, angular_width=10000, offset_from_center=10000, stdev=10000, midangle=10000, curve_score=10000, centroid_symmetry=10000,):
         self.v = v
         self.i = i
         self.centroid = centroid
@@ -169,6 +183,7 @@ class Candidate(object):
         self.offset_from_center = offset_from_center
         self.midangle = midangle
         self.curve_score = curve_score
+        self.centroid_symmetry = centroid_symmetry
 
     def score(self):
         angle_error = max(0, self.angle - math.pi/2)
@@ -740,6 +755,13 @@ class Vector(object):
                 score += 1.0 / (min_delta + 0.01)
                 if debug:
                     print(f"\t Score after tight min-delta: {score}")
+
+            sym_penalty = 0.0
+            for c in cs:
+                sym_penalty += c.centroid_symmetry
+            score += 0.5 * sym_penalty
+            if debug:
+                print(f"\t Sym penalty: {round(0.5 * sym_penalty, 2)}")
 
             cs.append(score)
             return cs
