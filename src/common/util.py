@@ -211,9 +211,13 @@ def incenter(polygon):
     """
     polygon = Polygon(polygon)
 
+    if not polygon.is_valid:
+        polygon = polygon.buffer(0)
+    if polygon.geom_type == 'MultiPolygon':
+        polygon = max(polygon.geoms, key=lambda g: g.area)
     c = polygon.centroid
     search_radius = 0.25 * (polygon.bounds[2] - polygon.bounds[0])
-    stride = 8
+    stride = max(1, min(8, int(search_radius / 4)))
     minx, miny, maxx, maxy = c.x - search_radius, c.y - search_radius, c.x + search_radius, c.y + search_radius
     points = np.array([Point(x, y) for x in range(int(minx), int(maxx), stride) for y in range(int(miny), int(maxy), stride)])
 
@@ -226,6 +230,8 @@ def incenter(polygon):
         if distance > max_distance:
             max_distance = distance
             incenter = point
+    if incenter is None:
+        return (int(round(c.x)), int(round(c.y)))
     return (int(round(incenter.x)), int(round(incenter.y)))
 
 

@@ -30,7 +30,20 @@ EDGE_WIDTH_MIN_RATIO = 0.4
 
 # scale pixel offsets depending on how big the BMPs are
 # 1.0 is tuned for around 100 pixels wide
-SCALAR = 9.45
+# Default SCALAR for backward compatibility (robot mode pieces ~945px wide)
+DEFAULT_SCALAR = 9.45
+SCALAR = DEFAULT_SCALAR
+
+
+class _NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
 
 
 def _serialize_color_features(features):
@@ -87,7 +100,7 @@ def load_and_vectorize(args):
 
 class Candidate(object):
     @staticmethod
-    def from_vertex(vertices, i, centroid, debug=False):
+    def from_vertex(vertices, i, centroid, debug=False, scalar=SCALAR):
         i = i % len(vertices)
         v_i = vertices[i]
 
@@ -95,10 +108,10 @@ class Candidate(object):
             print(f"\n\n\n!!!!!!!!!!!!!! {v_i} !!!!!!!!!!!!!!!\n")
 
         # find the angle from i to the points before it (h), and i to the points after (j)
-        vec_offset = 1 if SCALAR < 2 else 2    # we start comparing to this many points away, as really short vectors have noisy angles
-        vec_len_for_stdev = round(8 * SCALAR)  # compare this many total points to see the curvature
-        vec_len_for_angle = round(3 * SCALAR)  # compare this many total points to see the width of the angle of this corner
-        vec_len_for_curve = round(9 * SCALAR)  # wrap around these spokes and see if they form a clean curve or not
+        vec_offset = 1 if scalar < 2 else 2    # we start comparing to this many points away, as really short vectors have noisy angles
+        vec_len_for_stdev = round(8 * scalar)  # compare this many total points to see the curvature
+        vec_len_for_angle = round(3 * scalar)  # compare this many total points to see the width of the angle of this corner
+        vec_len_for_curve = round(9 * scalar)  # wrap around these spokes and see if they form a clean curve or not
 
         a_ih, _ = util.colinearity(from_point=vertices[i], to_points=util.slice(vertices, i-vec_len_for_angle-vec_offset, i-vec_offset-1))
         a_ij, _ = util.colinearity(from_point=vertices[i], to_points=util.slice(vertices, i+vec_offset+1, i+vec_len_for_angle+vec_offset))
@@ -199,6 +212,7 @@ class Vector(object):
         self.sides = []
         self.corners = []
         self.filename = filename
+        self.scalar = self.dim / 100.0
 
     def process(self, output_path=None, metadata={}, photo_space_position=(0, 0), scale_factor=1.0, render=False, color_image=None):
         print(f"> Vectorizing piece {self.id}")
@@ -248,7 +262,7 @@ class Vector(object):
             return
 
         # We generate an SVG of the piece for debugging
-        d = SCALAR / 2.0  # scale the SVG down by this denominator
+        d = self.scalar / 2.0  # scale the SVG down by this denominator
         colors = ['cc0000', '999900', '00aa99', '3300bb']
         svg = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>'
         svg += f'<svg width="{3 * self.width / d}" height="{3 * self.height / d}" viewBox="-10 -10 {20 + self.width / d} {20 + self.height /d}" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">'
@@ -288,14 +302,14 @@ class Vector(object):
             side_path = pathlib.Path(output_path).joinpath(f"side_{self.id}_{i}.json")
             # convert vertices from np types to native python types
             vertices = [[int(v[0]), int(v[1])] for v in side.vertices]
-            metadata['piece_id'] = self.id
+            metadata['piece_id'] = int(self.id)
             metadata['side_index'] = i
             metadata['vertices'] = vertices
-            metadata['piece_center'] = list(side.piece_center)
+            metadata['piece_center'] = [int(side.piece_center[0]), int(side.piece_center[1])]
             metadata['is_edge'] = side.is_edge
-            metadata['incenter'] = list(self.incenter)
+            metadata['incenter'] = [int(self.incenter[0]), int(self.incenter[1])]
             with open(side_path, 'w') as f:
-                f.write(json.dumps(metadata))
+                f.write(json.dumps(metadata, cls=_NumpyEncoder))
 
         # Save color features if available (phone mode)
         if hasattr(self, 'color_features'):
@@ -427,7 +441,7 @@ class Vector(object):
             debug = self.vertices[i][1] in (2260, 1250)
             candidate = None
             try:
-                candidate = Candidate.from_vertex(self.vertices, i, self.centroid, debug=debug)
+                candidate = Candidate.from_vertex(self.vertices, i, self.centroid, debug=debug, scalar=self.scalar)
             except Exception as e:
                 print(f"Error while computing curve score for piece {self.id}: {e}")
             curve_score = 0.0
@@ -452,7 +466,7 @@ class Vector(object):
 
             # if the two corners are close together, pick the one with the lower score
             # then fast forward past this second candidate
-            if c1.i - c0.i <= 2 * SCALAR:
+            if c1.i - c0.i <= 2 * self.scalar:
                 if c0.score() < c1.score():
                     cs_by_i.remove(c1)
                 else:
@@ -628,7 +642,7 @@ class Vector(object):
             # - a gentle sloping curve (like the shape of a parenthesis)
             # - a gentle squiggle (like a sine wave)
             area = util.normalized_area_between_corners(vertices)
-            is_edge = bool(area < 0.75 * SCALAR)
+            is_edge = bool(area < 0.75 * self.scalar)
             side = sides.Side(piece_id=self.id, side_id=None, vertices=vertices, piece_center=self.centroid, is_edge=is_edge)
             self.sides.append(side)
 
@@ -679,8 +693,8 @@ class Vector(object):
         #    MAX     MIN  |
         #
         # we don't go all the way up to the corner because the last little bit might be bent
-        SLICE_MIN_DIST_FROM_CORNER = int(round(1.5 * SCALAR))
-        SLICE_MAX_DIST_FROM_CORNER = int(round(6.0 * SCALAR))
+        SLICE_MIN_DIST_FROM_CORNER = int(round(1.5 * self.scalar))
+        SLICE_MAX_DIST_FROM_CORNER = int(round(6.0 * self.scalar))
         for i in range(4):
             j = (i - 1) % 4
             side_i = self.sides[i]

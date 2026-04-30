@@ -249,19 +249,29 @@ def deduplicate_phone(input_path, output_path):
     for path in input_path.glob("side_*_0.json"):
         i = int(path.parts[-1].split('_')[1])
         piece_sides = []
+        valid = True
         for j in range(4):
             json_path = input_path.joinpath(f'side_{i}_{j}.json')
-            with open(json_path) as f:
-                data = json.load(f)
-                side = sides.Side(
-                    i, j, data['vertices'],
-                    piece_center=data['piece_center'],
-                    is_edge=data['is_edge'],
-                    resample=True, rotate=False,
-                    photo_filename=data.get('original_photo_name', ''),
-                )
-                piece_sides.append(side)
-        pieces_data[i] = piece_sides
+            try:
+                with open(json_path) as f:
+                    data = json.load(f)
+                    if not data.get('vertices'):
+                        valid = False
+                        break
+                    side = sides.Side(
+                        i, j, data['vertices'],
+                        piece_center=data['piece_center'],
+                        is_edge=data['is_edge'],
+                        resample=True, rotate=False,
+                        photo_filename=data.get('original_photo_name', ''),
+                    )
+                    piece_sides.append(side)
+            except (json.JSONDecodeError, KeyError, FileNotFoundError) as e:
+                print(f"  Warning: skipping piece {i} side {j}: {e}")
+                valid = False
+                break
+        if valid and len(piece_sides) == 4:
+            pieces_data[i] = piece_sides
 
     if len(pieces_data) <= 1:
         for pid in pieces_data:

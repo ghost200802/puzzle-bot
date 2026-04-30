@@ -5,3 +5,5 @@
 __pycache__
 *.o
 /example_data
+/input
+/output

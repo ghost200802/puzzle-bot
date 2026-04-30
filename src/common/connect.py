@@ -118,7 +118,12 @@ def _find_potential_matches_for_piece(ps, piece_id, color_data=None, debug=False
 
         # make sure we have at least one match
         if len(piece.fits[si]) == 0:
-            raise Exception(f'Piece {piece_id} side {si} has no matches but is not an edge')
+            if piece.sides[si].is_edge:
+                continue
+            else:
+                print(f"Warning: Piece {piece_id} side {si} has no matches but is not an edge (treating as edge)")
+                piece.sides[si].is_edge = True
+                continue
 
         # sort by error
         piece.fits[si] = sorted(piece.fits[si], key=lambda x: x[2])
