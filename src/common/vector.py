@@ -112,7 +112,7 @@ class Candidate(object):
         vec_offset = 1 if scalar < 2 else 2
         vec_len_for_stdev = round(8 * scalar)
         stdev_step = max(1, round(0.75 * scalar))
-        vec_len_for_angle = round(3 * scalar)
+        vec_len_for_angle = round(12 * scalar)
         vec_len_for_curve = round(9 * scalar)
 
         a_ih, _ = util.colinearity(from_point=vertices[i], to_points=util.slice(vertices, i-vec_len_for_angle-vec_offset, i-vec_offset-1))
