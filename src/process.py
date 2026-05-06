@@ -167,6 +167,8 @@ def _batch_process_phone(path, serialize=False, id=None,
                     if r is not None:
                         print(f"  Vectorized piece {r}")
 
+        vector.validate_all_edges(str(vector_dir))
+
     # Step 4: Deduplicate
     if start_at_step <= 4 and stop_before_step > 4:
         print(f"\n### 4 - Deduplicating ###\n")
@@ -335,6 +337,8 @@ def _vectorize_all(input_path, output_path, metadata, robot_states, photo_space_
     else:
         with multiprocessing.Pool(processes=os.cpu_count()) as pool:
             pool.map(vector.load_and_vectorize, args)
+
+    vector.validate_all_edges(output_path)
 
     duration = time.time() - start_time
     print(f"Vectorizing took {round(duration, 2)} seconds")

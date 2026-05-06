@@ -98,6 +98,100 @@ def load_and_vectorize(args):
         raise e
 
 
+def validate_all_edges(vector_dir):
+    import math
+    vector_dir = pathlib.Path(vector_dir)
+    side_files = sorted(vector_dir.glob('side_*_*.json'))
+    if not side_files:
+        print("[validate_all_edges] No side JSON files found, skipping.")
+        return
+
+    side_names = ['R', 'Y', 'G', 'B']
+    all_records = []
+
+    for f in side_files:
+        with open(f, 'r') as fp:
+            data = json.load(fp)
+        vertices = [tuple(v) for v in data['vertices']]
+        if len(vertices) < 2:
+            continue
+        photo_w = data['photo_width']
+        photo_h = data['photo_height']
+        scalar = (photo_w + photo_h) / 2 / 100.0
+        threshold = 1.8 * scalar
+
+        p0 = vertices[0]
+        p1 = vertices[-1]
+        distances = [util.distance_to_line(point=p, start=p0, end=p1) for p in vertices]
+        n = len(distances)
+        d_mean = sum(distances) / n
+        d_max = max(distances)
+        d_var = sum((d - d_mean) ** 2 for d in distances) / n
+        d_stdev = math.sqrt(d_var)
+
+        is_edge = d_stdev < threshold
+        piece_id = data['piece_id']
+        side_idx = data['side_index']
+
+        all_records.append({
+            'piece': piece_id,
+            'side': side_idx,
+            'side_name': side_names[side_idx],
+            'scalar': scalar,
+            'threshold': threshold,
+            'mean': d_mean,
+            'max': d_max,
+            'stdev': d_stdev,
+            'var': d_var,
+            'is_edge': is_edge,
+        })
+
+    flat = [r for r in all_records if r['is_edge']]
+    nonflat = [r for r in all_records if not r['is_edge']]
+    total = len(all_records)
+
+    print(f"\n{'=' * 70}")
+    print(f"  EDGE CLASSIFICATION VALIDATION - {total} edges from {len(set(r['piece'] for r in all_records))} pieces")
+    print(f"{'=' * 70}")
+    print(f"  FLAT (border):  {len(flat)} edges")
+    print(f"  PUZZLE (tab):   {len(nonflat)} edges")
+    print(f"  Threshold: stdev < 1.8 * scalar")
+
+    all_ok = True
+    params = ['mean', 'max', 'stdev', 'var']
+
+    for param in params:
+        flat_vals = sorted(r[param] for r in flat)
+        nonflat_vals = sorted(r[param] for r in nonflat)
+        if not flat_vals or not nonflat_vals:
+            continue
+        flat_max = flat_vals[-1]
+        nonflat_min = nonflat_vals[0]
+        ratio = nonflat_min / flat_max if flat_max > 0 else float('inf')
+
+        if ratio > 1:
+            status = "CLEAN"
+        else:
+            status = "OVERLAP"
+            all_ok = False
+
+        print(f"\n  {param:<6}  FLAT_max={flat_max:>10.4f}  PUZZLE_min={nonflat_min:>10.4f}  ratio={ratio:>6.1f}x  [{status}]")
+
+        if ratio <= 1:
+            in_zone = [r for r in all_records if flat_max >= r[param] >= nonflat_min]
+            for r in sorted(in_zone, key=lambda x: x[param]):
+                label = 'FLAT' if r['is_edge'] else 'PUZZLE'
+                print(f"         {r['piece']:>3}/{r['side']}({r['side_name']}) {label:>6} {param}={r[param]:.4f}  stdev={r['stdev']:.4f}  thr={r['threshold']:.2f}")
+
+    if all_ok:
+        print(f"\n  >>> All 4 parameters show clean separation. Classification is reliable.")
+    else:
+        print(f"\n  >>> WARNING: Some parameters have overlap zones. Review threshold.")
+
+    print(f"{'=' * 70}\n")
+    return all_ok
+
+
 class Candidate(object):
     @staticmethod
     def from_vertex(vertices, i, centroid, debug=False, scalar=SCALAR, angle_max_deg=None):
