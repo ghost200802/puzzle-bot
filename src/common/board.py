@@ -32,6 +32,7 @@ OPPOSITE = {
 
 MAX_ITERATIONS_TO_FIND_BORDER = 1000
 MAX_ITERATIONS = 150000000
+MAX_PARTIAL_SOLVE_ITERATIONS = 5000000
 
 class Orientation(object):
     ZERO_POINTS_UP = 0
@@ -162,6 +163,20 @@ class Board(object):
     def get(self, x, y):
         return self._board[y][x]
 
+    @property
+    def missing_positions(self):
+        """Return all unoccupied positions as list of (x, y)."""
+        positions = []
+        for y in range(self.height):
+            for x in range(self.width):
+                if self._board[y][x] is None:
+                    positions.append((x, y))
+        return positions
+
+    @property
+    def total_positions(self):
+        return self.width * self.height
+
 
 def build(connectivity=None, input_path=None, output_path=None,
           puzzle_width=None, puzzle_height=None, piece_edge_info=None):
@@ -213,6 +228,13 @@ def build(connectivity=None, input_path=None, output_path=None,
     success = False
     solution = None
 
+    total_expected = pw * ph
+    is_incomplete = len(ps) < total_expected
+
+    if is_incomplete:
+        print(f"Warning: only {len(ps)}/{total_expected} pieces available, "
+              f"attempting partial solve...")
+
     # For a given puzzle, put the corners in a predictable order using the
     # arbitrary but repeatible heuristic of how many adjacent pieces they would fit.
     # This ensures the solution will appear in the same orientation, for any given puzzle.
@@ -232,6 +254,16 @@ def build(connectivity=None, input_path=None, output_path=None,
             continue
         success = True
         break
+
+    if not success and is_incomplete:
+        print("Full solve failed with incomplete pieces, trying partial solve...")
+        try:
+            solution = build_partial(ps, puzzle_width=pw, puzzle_height=ph)
+            if solution is not None and solution.placed_count > 0:
+                success = True
+                print(f"Partial solution found: {solution.placed_count}/{total_expected} pieces")
+        except Exception as e:
+            print(f"Partial solve also failed: {e}")
 
     if not success:
         raise Exception("Failed to solve")
@@ -322,3 +354,214 @@ def _orient_start_corner_to_top_left(p):
         return Orientation.ZERO_POINTS_UP
     else:
         raise ValueError(f"Piece {p} is not a corner piece")
+
+
+def build_partial(ps, puzzle_width=None, puzzle_height=None):
+    """
+    Attempt to solve a puzzle with missing pieces.
+
+    Strategy:
+      1. Find corner pieces and start building from the best corner
+      2. Skip empty positions where no piece fits (missing pieces)
+      3. Continue building around gaps
+      4. Return the best partial solution found
+
+    Args:
+        ps: connectivity graph {piece_id: [[fits], ...]}
+        puzzle_width: width of the puzzle
+        puzzle_height: height of the puzzle
+
+    Returns:
+        Board with partial placement, or None if no placement found
+    """
+    pw = puzzle_width or PUZZLE_WIDTH
+    ph = puzzle_height or PUZZLE_HEIGHT
+
+    corners = []
+    for piece_id, neighbors in ps.items():
+        edge_count = sum(1 for n in neighbors if len(n) == 0)
+        if edge_count >= 2:
+            corners.append(piece_id)
+
+    if not corners:
+        print("No corner pieces found for partial solve")
+        return None
+
+    corners.sort(
+        key=lambda c: sum(len(fits) for fits in ps[c]),
+        reverse=True
+    )
+
+    best_solution = None
+    best_count = 0
+
+    for start_piece_id in corners[:2]:
+        try:
+            start_piece_fits = ps[start_piece_id]
+            start_orientation = _orient_start_corner_to_top_left(
+                start_piece_fits
+            )
+        except ValueError:
+            continue
+
+        board = Board(width=pw, height=ph)
+        board.place(start_piece_id, start_piece_fits, 0, 0,
+                    start_orientation)
+
+        direction = RIGHT
+        x, y = 1, 0
+
+        iteration = 0
+        while iteration < MAX_PARTIAL_SOLVE_ITERATIONS:
+            iteration += 1
+
+            if x < 0 or x >= pw or y < 0 or y >= ph:
+                if direction == RIGHT:
+                    direction = BOTTOM
+                    x = 0
+                    y = 1
+                elif direction == BOTTOM:
+                    direction = LEFT
+                    x = pw - 2
+                    y = ph - 1
+                elif direction == LEFT:
+                    direction = TOP
+                    x = 1
+                    y = ph - 2
+                else:
+                    break
+                continue
+
+            if board.get(x, y) is not None:
+                next_x = x + (1 if direction == RIGHT
+                              else -1 if direction == LEFT else 0)
+                next_y = y + (1 if direction == BOTTOM
+                              else -1 if direction == TOP else 0)
+
+                if not board.is_available(next_x, next_y):
+                    if direction == RIGHT:
+                        direction = BOTTOM
+                        x = 0
+                        y = 1
+                    elif direction == BOTTOM:
+                        direction = LEFT
+                        x = pw - 2
+                        y = ph - 1
+                    elif direction == LEFT:
+                        direction = TOP
+                        x = 1
+                        y = ph - 2
+                    else:
+                        break
+                else:
+                    x, y = next_x, next_y
+                continue
+
+            index_of_neighbor = (direction - start_orientation) % 4
+            current_piece = board.get(x - (1 if direction == RIGHT
+                                           else -1 if direction == LEFT
+                                           else 0),
+                                      y - (1 if direction == BOTTOM
+                                           else -1 if direction == TOP
+                                           else 0))
+            if current_piece is None:
+                break
+
+            current_pid = current_piece[0]
+            current_ori = current_piece[2]
+
+            placed = False
+            candidates = []
+            for neighbor_pid, neighbor_side, error in ps.get(current_pid, [[]])[(
+                direction - current_ori) % 4]:
+                if neighbor_pid in board._placed_piece_ids:
+                    continue
+                neighbor_orientation = (OPPOSITE[direction] - neighbor_side) % 4
+                ok, _ = board.can_place(
+                    neighbor_pid, ps[neighbor_pid],
+                    x, y, neighbor_orientation
+                )
+                if ok:
+                    candidates.append((error, neighbor_pid, neighbor_orientation))
+
+            if candidates:
+                candidates.sort()
+                _, best_pid, best_ori = candidates[0]
+                board.place(best_pid, ps[best_pid], x, y, best_ori)
+            else:
+                pass
+
+            next_x = x + (1 if direction == RIGHT
+                          else -1 if direction == LEFT else 0)
+            next_y = y + (1 if direction == BOTTOM
+                          else -1 if direction == TOP else 0)
+
+            if not board.is_available(next_x, next_y):
+                if direction == RIGHT:
+                    direction = BOTTOM
+                    x = 0
+                    y = 1
+                elif direction == BOTTOM:
+                    direction = LEFT
+                    x = pw - 2
+                    y = ph - 1
+                elif direction == LEFT:
+                    direction = TOP
+                    x = 1
+                    y = ph - 2
+                else:
+                    break
+            else:
+                x, y = next_x, next_y
+
+        if board.placed_count > best_count:
+            best_count = board.placed_count
+            best_solution = board
+
+    return best_solution
+
+
+def evaluate_solution(board, connectivity=None):
+    """
+    Evaluate the quality of a (partial) solution.
+
+    Returns dict with:
+      - placed_count: number of placed pieces
+      - total_positions: total grid positions
+      - coverage: percentage of positions filled
+      - matched_edges: number of matched neighbor pairs
+      - total_possible_edges: maximum possible matched edges
+      - match_quality: percentage of possible edges matched
+    """
+    placed = board.placed_count
+    total = board.total_positions
+    coverage = placed / total if total > 0 else 0
+
+    matched = 0
+    possible = 0
+    for y in range(board.height):
+        for x in range(board.width):
+            cell = board.get(x, y)
+            if cell is None:
+                continue
+            if x < board.width - 1:
+                right = board.get(x + 1, y)
+                if right is not None:
+                    matched += 1
+                possible += 1
+            if y < board.height - 1:
+                below = board.get(x, y + 1)
+                if below is not None:
+                    matched += 1
+                possible += 1
+
+    quality = matched / possible if possible > 0 else 0
+
+    return {
+        'placed_count': placed,
+        'total_positions': total,
+        'coverage': coverage,
+        'matched_edges': matched,
+        'total_possible_edges': possible,
+        'match_quality': quality,
+    }

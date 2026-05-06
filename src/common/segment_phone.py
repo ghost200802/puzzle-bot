@@ -180,8 +180,171 @@ def segment_with_fallback(gray, bgr=None, min_piece_pixels=100):
             pass
 
     if not results:
-        # Return empty mask as last resort
         return np.zeros_like(gray, dtype=np.uint8)
 
     results.sort(key=lambda x: x[2], reverse=True)
     return results[0][1]
+
+
+def evaluate_segmentation_quality(binary, gray, expected_piece_area_ratio=0.005):
+    """
+    Evaluate the quality of a segmentation result.
+
+    Metrics:
+      - piece_ratio: fraction of image that is piece pixels
+      - piece_count_estimate: estimated number of connected components
+      - edge_sharpness: how well-defined piece boundaries are
+      - overall_score: combined quality score (0-1, higher is better)
+
+    Args:
+        binary: binary mask (uint8, 0 or 1)
+        gray: original grayscale image
+        expected_piece_area_ratio: expected area ratio per piece
+
+    Returns:
+        dict with quality metrics
+    """
+    h, w = binary.shape
+    total_pixels = h * w
+    piece_pixels = np.sum(binary == 1)
+    piece_ratio = piece_pixels / total_pixels
+
+    contours, _ = cv2.findContours(
+        binary * 255, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    piece_count = len(contours)
+
+    if piece_count == 0:
+        return {
+            'piece_ratio': 0,
+            'piece_count': 0,
+            'edge_sharpness': 0,
+            'overall_score': 0,
+            'issues': ['no_pieces_found'],
+        }
+
+    areas = [cv2.contourArea(c) for c in contours]
+    min_area = min(areas)
+    max_area = max(areas)
+    mean_area = np.mean(areas)
+    std_area = np.std(areas) if len(areas) > 1 else 0
+    area_cv = std_area / mean_area if mean_area > 0 else 0
+
+    edge_region = cv2.Canny(gray, 50, 150)
+    dilated = cv2.dilate(binary * 255,
+                         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+                         iterations=1)
+    eroded = cv2.erode(binary * 255,
+                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+                        iterations=1)
+    boundary = dilated - eroded
+    overlap = np.sum((boundary > 0) & (edge_region > 0))
+    boundary_total = np.sum(boundary > 0)
+    edge_sharpness = overlap / boundary_total if boundary_total > 0 else 0
+
+    issues = []
+    if piece_ratio < 0.05:
+        issues.append('too_few_piece_pixels')
+    elif piece_ratio > 0.95:
+        issues.append('too_many_piece_pixels')
+
+    if piece_count < 3:
+        issues.append('too_few_pieces')
+    elif piece_count > 500:
+        issues.append('too_many_pieces')
+
+    if area_cv > 2.0:
+        issues.append('high_area_variance')
+
+    if edge_sharpness < 0.1:
+        issues.append('blurry_boundaries')
+
+    score = 0.0
+    score += min(piece_ratio * 2, 1.0) * 0.3
+    score += min(edge_sharpness, 1.0) * 0.3
+    if 0.1 < piece_ratio < 0.8:
+        score += 0.2
+    if area_cv < 1.5:
+        score += 0.2
+
+    return {
+        'piece_ratio': piece_ratio,
+        'piece_count': piece_count,
+        'edge_sharpness': edge_sharpness,
+        'overall_score': score,
+        'issues': issues,
+        'is_good': len(issues) == 0,
+    }
+
+
+def segment_three_tier(gray, bgr=None, min_piece_pixels=100,
+                        min_quality_score=0.3):
+    """
+    Three-tier segmentation strategy with quality evaluation.
+
+    Tier 1 (fast): Adaptive threshold - check quality
+    Tier 2 (medium): Otsu global threshold - check quality
+    Tier 3 (slow): GrabCut - best effort
+
+    At each tier, the segmentation quality is evaluated. If the quality
+    is acceptable, the result is returned immediately. Otherwise, the
+    next tier is tried.
+
+    Args:
+        gray: grayscale image
+        bgr: BGR color image (required for GrabCut tier)
+        min_piece_pixels: minimum acceptable piece pixel count
+        min_quality_score: minimum quality score to accept a result
+
+    Returns:
+        (binary_mask, method_used, quality_dict)
+    """
+    bg = detect_bg_brightness(gray)
+
+    for method_name, seg_func in [
+        ('adaptive', lambda: segment_adaptive(gray, bg)),
+        ('otsu', lambda: segment_otsu(gray, bg)),
+    ]:
+        try:
+            binary = seg_func()
+            n_pixels = np.sum(binary == 1)
+
+            if n_pixels < min_piece_pixels:
+                continue
+
+            quality = evaluate_segmentation_quality(binary, gray)
+
+            if quality['overall_score'] >= min_quality_score and quality['is_good']:
+                return binary, method_name, quality
+
+        except Exception:
+            continue
+
+    if bgr is not None:
+        try:
+            binary = segment_grabcut(bgr)
+            n_pixels = np.sum(binary == 1)
+
+            if n_pixels >= min_piece_pixels:
+                quality = evaluate_segmentation_quality(binary, gray)
+                return binary, 'grabcut', quality
+
+        except Exception:
+            pass
+
+    for method_name in ['adaptive', 'otsu']:
+        try:
+            binary = segment_photo(gray, bgr=bgr, method=method_name)
+            n_pixels = np.sum(binary == 1)
+            if n_pixels >= min_piece_pixels:
+                quality = evaluate_segmentation_quality(binary, gray)
+                return binary, method_name, quality
+        except Exception:
+            continue
+
+    quality = {
+        'piece_ratio': 0, 'piece_count': 0, 'edge_sharpness': 0,
+        'overall_score': 0, 'issues': ['all_methods_failed'],
+        'is_good': False,
+    }
+    return np.zeros_like(gray, dtype=np.uint8), 'none', quality

@@ -225,3 +225,182 @@ def validate_piece(piece_binary, min_pixels=50, max_pixels=None):
         return False, f'bad_aspect_ratio ({aspect_ratio:.1f})'
 
     return True, 'ok'
+
+
+def detect_document_contour(image, edge_area_ratio=0.85):
+    """
+    Detect the four corners of the main document/puzzle region in an image.
+    Uses edge detection + contour finding + convex hull approximation.
+
+    Args:
+        image: BGR input image
+        edge_area_ratio: minimum area ratio for accepting a contour
+
+    Returns:
+        List of 4 corner points [[x, y], ...] in order: TL, TR, BR, BL,
+        or None if no suitable contour found.
+    """
+    h, w = image.shape[:2]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 50, 150)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    edges = cv2.dilate(edges, kernel, iterations=1)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+
+    contours, _ = cv2.findContours(
+        edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    if not contours:
+        return None
+
+    min_area = w * h * edge_area_ratio * 0.3
+    best_contour = None
+    best_score = 0
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < min_area:
+            continue
+
+        hull = cv2.convexHull(contour)
+        perimeter = cv2.arcLength(hull, True)
+        approx = cv2.approxPolyDP(hull, 0.02 * perimeter, True)
+
+        if len(approx) == 4:
+            score = area
+            if score > best_score:
+                best_score = score
+                best_contour = approx
+        elif len(approx) > 4:
+            hull_approx = cv2.convexHull(approx)
+            perimeter2 = cv2.arcLength(hull_approx, True)
+            approx2 = cv2.approxPolyDP(hull_approx, 0.02 * perimeter2, True)
+            if len(approx2) == 4:
+                score = area
+                if score > best_score:
+                    best_score = score
+                    best_contour = approx2
+
+    if best_contour is None:
+        return None
+
+    pts = best_contour.reshape(4, 2)
+
+    def _dist(p1, p2):
+        return np.sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+
+    center = pts.mean(axis=0)
+    top_points = pts[pts[:, 1] < center[1]]
+    bottom_points = pts[pts[:, 1] >= center[1]]
+
+    if len(top_points) == 2 and len(bottom_points) == 2:
+        tl = top_points[top_points[:, 0] == top_points[:, 0].min()][0]
+        tr = top_points[top_points[:, 0] == top_points[:, 0].max()][0]
+        bl = bottom_points[bottom_points[:, 0] == bottom_points[:, 0].min()][0]
+        br = bottom_points[bottom_points[:, 0] == bottom_points[:, 0].max()][0]
+    else:
+        dists = [_dist(p, [0, 0]) for p in pts]
+        order = np.argsort(dists)
+        tl = pts[order[0]]
+        br = pts[order[-1]]
+        remaining = [pts[i] for i in range(4) if i not in [order[0], order[-1]]]
+        if remaining[0][0] < remaining[1][0]:
+            bl, tr = remaining
+        else:
+            tr, bl = remaining
+
+    return [tl.tolist(), tr.tolist(), br.tolist(), bl.tolist()]
+
+
+def perspective_correct(image, corners=None, output_size=None):
+    """
+    Apply perspective correction to an image.
+
+    Args:
+        image: BGR input image
+        corners: Optional list of 4 corners [[x, y], ...] in TL, TR, BR, BL order.
+                 If None, automatically detects the document contour.
+        output_size: Optional (width, height) for the output. If None, uses
+                     the maximum width and height from the detected corners.
+
+    Returns:
+        (corrected_bgr, transform_matrix) or (None, None) if correction failed.
+    """
+    if corners is None:
+        corners = detect_document_contour(image)
+        if corners is None:
+            return None, None
+
+    corners = np.array(corners, dtype=np.float32)
+
+    if output_size is None:
+        top_width = np.sqrt(
+            (corners[1][0] - corners[0][0]) ** 2 +
+            (corners[1][1] - corners[0][1]) ** 2
+        )
+        bottom_width = np.sqrt(
+            (corners[2][0] - corners[3][0]) ** 2 +
+            (corners[2][1] - corners[3][1]) ** 2
+        )
+        left_height = np.sqrt(
+            (corners[3][0] - corners[0][0]) ** 2 +
+            (corners[3][1] - corners[0][1]) ** 2
+        )
+        right_height = np.sqrt(
+            (corners[2][0] - corners[1][0]) ** 2 +
+            (corners[2][1] - corners[1][1]) ** 2
+        )
+        out_w = int(max(top_width, bottom_width))
+        out_h = int(max(left_height, right_height))
+    else:
+        out_w, out_h = output_size
+
+    dst = np.array([
+        [0, 0],
+        [out_w - 1, 0],
+        [out_w - 1, out_h - 1],
+        [0, out_h - 1],
+    ], dtype=np.float32)
+
+    M = cv2.getPerspectiveTransform(corners, dst)
+    corrected = cv2.warpPerspective(image, M, (out_w, out_h),
+                                     flags=cv2.INTER_LINEAR,
+                                     borderMode=cv2.BORDER_REPLICATE)
+
+    return corrected, M
+
+
+def auto_crop_to_content(image, border_ratio=0.02):
+    """
+    Automatically crop image to the main content area.
+    Removes uniform borders.
+
+    Args:
+        image: BGR input image
+        border_ratio: ratio of border to keep (0 = tight crop)
+
+    Returns:
+        Cropped BGR image.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255,
+                               cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    coords = cv2.findNonZero(binary)
+    if coords is None:
+        return image
+
+    x, y, w, h = cv2.boundingRect(coords)
+    margin_x = int(w * border_ratio)
+    margin_y = int(h * border_ratio)
+
+    x = max(0, x - margin_x)
+    y = max(0, y - margin_y)
+    w = min(image.shape[1] - x, w + 2 * margin_x)
+    h = min(image.shape[0] - y, h + 2 * margin_y)
+
+    return image[y:y + h, x:x + w].copy()

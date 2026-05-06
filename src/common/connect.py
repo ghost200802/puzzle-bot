@@ -26,13 +26,13 @@ SOLUTION = [
 def build(input_path, output_path, use_image_matching=False):
     """
     Build connectivity graph from piece data.
-    When use_image_matching=True, also considers image/color similarity.
+    When use_image_matching=True, also considers image/color similarity
+    including edge color band continuity scoring.
     """
     print("> Loading piece data...")
     ps = pieces.Piece.load_all(input_path, resample=True)
     print("\t ...Loaded")
 
-    # Load color feature data for image-based matching (phone mode)
     color_data = {}
     if use_image_matching:
         color_data = _load_color_data(input_path)
@@ -106,7 +106,12 @@ def _find_potential_matches_for_piece(ps, piece_id, color_data=None, debug=False
                     color_bonus = _compute_color_match_bonus(
                         piece_id, other_piece_id, si, sj, color_data
                     )
-                    adjusted_error = error * (1.0 - color_bonus * 0.3)
+                    continuity_bonus = _compute_edge_continuity_bonus(
+                        piece_id, other_piece_id, si, sj,
+                        side, other_side, color_data
+                    )
+                    combined_bonus = max(color_bonus, continuity_bonus)
+                    adjusted_error = error * (1.0 - combined_bonus * 0.3)
                 else:
                     adjusted_error = error
 
@@ -173,6 +178,58 @@ def _compute_color_match_bonus(pid_a, pid_b, side_a, side_b, color_data):
             pass
 
     return 0.0
+
+
+def _compute_edge_continuity_bonus(pid_a, pid_b, side_a_idx, side_b_idx,
+                                    side_a, side_b, color_data):
+    """
+    Compute edge color band continuity bonus between two pieces.
+    Uses extract_color_band_along_side and color_continuity_score from
+    image_match to evaluate color continuity along the matching edges.
+
+    Returns a value from 0 to 1 (1 = perfect continuity).
+    """
+    import cv2
+
+    data_a = color_data.get(pid_a, {})
+    data_b = color_data.get(pid_b, {})
+    color_path_a = data_a.get('color_image_path')
+    color_path_b = data_b.get('color_image_path')
+
+    if not color_path_a or not color_path_b:
+        return 0.0
+
+    try:
+        from common.image_match import (
+            extract_color_band_along_side,
+            color_continuity_score,
+        )
+
+        img_a = cv2.imread(color_path_a)
+        img_b = cv2.imread(color_path_b)
+
+        if img_a is None or img_b is None:
+            return 0.0
+
+        band_width = 8
+        band_a = extract_color_band_along_side(
+            img_a, side_a.vertices, band_width
+        )
+        band_b = extract_color_band_along_side(
+            img_b, side_b.vertices, band_width
+        )
+
+        if not band_a or not band_b:
+            return 0.0
+
+        band_b_reversed = list(reversed(band_b))
+
+        raw_score = color_continuity_score(band_a, band_b_reversed)
+        normalized = max(0.0, min(1.0, (raw_score - 1.0) / 1.0))
+        return normalized
+
+    except Exception:
+        return 0.0
 
 
 def _save(pieces, out_directory):

@@ -6,6 +6,7 @@ from glob import glob
 import shutil
 import itertools
 from pathlib import Path
+import cv2
 
 from common import util, sides
 from common.config import *
@@ -235,7 +236,14 @@ def find_duplicate_candidates(piece_hashes, hash_threshold=15):
 
 def deduplicate_phone(input_path, output_path):
     """
-    Phone mode dedup: geometric verification.
+    Phone mode dedup: two-stage strategy.
+
+    Stage 1 (coarse): perceptual hash filtering to find candidate pairs
+    Stage 2 (fine): geometric verification on candidates
+
+    Groups duplicates via Union-Find and selects best representative
+    per group. Optionally fuses multi-view data for improved quality.
+
     input_path: directory containing side_*.json files
     output_path: directory to copy unique pieces to
     Returns number of unique pieces.
@@ -244,14 +252,15 @@ def deduplicate_phone(input_path, output_path):
     output_path = Path(output_path)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # Load all pieces
     pieces_data = {}
     piece_origins = {}
+    piece_metadata = {}
     for path in input_path.glob("side_*_0.json"):
         i = int(path.parts[-1].split('_')[1])
         piece_sides = []
         valid = True
         origin = None
+        meta = {}
         for j in range(4):
             json_path = input_path.joinpath(f'side_{i}_{j}.json')
             try:
@@ -262,6 +271,12 @@ def deduplicate_phone(input_path, output_path):
                         break
                     if j == 0:
                         origin = data.get('photo_space_origin')
+                        meta['is_complete'] = data.get('is_complete', True)
+                        meta['original_photo_name'] = data.get(
+                            'original_photo_name', ''
+                        )
+                        meta['photo_width'] = data.get('photo_width', 500)
+                        meta['photo_height'] = data.get('photo_height', 500)
                     side = sides.Side(
                         i, j, data['vertices'],
                         piece_center=data['piece_center'],
@@ -278,6 +293,7 @@ def deduplicate_phone(input_path, output_path):
             pieces_data[i] = piece_sides
             if origin:
                 piece_origins[i] = origin
+            piece_metadata[i] = meta
 
     if len(pieces_data) <= 1:
         for pid in pieces_data:
@@ -286,29 +302,81 @@ def deduplicate_phone(input_path, output_path):
 
     has_origins = len(piece_origins) == len(pieces_data)
 
-    # Find duplicate groups via geometric comparison
     dup_candidates = []
     ids = list(pieces_data.keys())
     skipped_by_origin = 0
-    for i, j in itertools.combinations(range(len(ids)), 2):
-        id_a, id_b = ids[i], ids[j]
 
-        if has_origins and id_a in piece_origins and id_b in piece_origins:
-            oa, ob = piece_origins[id_a], piece_origins[id_b]
-            dist = math.sqrt((oa[0] - ob[0])**2 + (oa[1] - ob[1])**2)
-            if dist > DUPLICATE_CENTROID_DELTA_PX:
-                skipped_by_origin += 1
-                continue
+    try:
+        piece_hashes = {}
+        for pid in ids:
+            vis = np.zeros((100, 100), dtype=np.uint8)
+            for side in pieces_data[pid]:
+                verts = side.vertices.astype(np.int32)
+                cv2.fillPoly(vis, [verts], 255)
+            try:
+                bh, ch = compute_piece_hash(
+                    (vis > 127).astype(np.uint8)
+                )
+                piece_hashes[pid] = (bh, ch)
+            except Exception:
+                piece_hashes[pid] = (None, None)
 
-        score = _compare(pieces_data[id_a], pieces_data[id_b])
-        if score < PHONE_DUPLICATE_GEOMETRIC_THRESHOLD:
-            dup_candidates.append((id_a, id_b, score))
+        hash_threshold = PHONE_HASH_THRESHOLD
+        hash_candidates = find_duplicate_candidates(
+            piece_hashes, hash_threshold
+        )
+        hash_candidate_set = set()
+        for id_a, id_b, _ in hash_candidates:
+            hash_candidate_set.add((min(id_a, id_b), max(id_a, id_b)))
+
+        print(f"Dedup stage 1 (hash): {len(hash_candidates)} candidate pairs "
+              f"from {len(ids)} pieces")
+
+        for i, j in itertools.combinations(range(len(ids)), 2):
+            id_a, id_b = ids[i], ids[j]
+
+            if has_origins and id_a in piece_origins and id_b in piece_origins:
+                oa, ob = piece_origins[id_a], piece_origins[id_b]
+                dist = math.sqrt((oa[0] - ob[0])**2 + (oa[1] - ob[1])**2)
+                if dist > DUPLICATE_CENTROID_DELTA_PX:
+                    skipped_by_origin += 1
+                    continue
+
+            pair_key = (min(id_a, id_b), max(id_a, id_b))
+
+            if pair_key in hash_candidate_set:
+                score = _compare(pieces_data[id_a], pieces_data[id_b])
+                if score < PHONE_DUPLICATE_GEOMETRIC_THRESHOLD:
+                    dup_candidates.append((id_a, id_b, score))
+            else:
+                bh_a, ch_a = piece_hashes.get(id_a, (None, None))
+                bh_b, ch_b = piece_hashes.get(id_b, (None, None))
+                if bh_a is None or bh_b is None:
+                    score = _compare(pieces_data[id_a], pieces_data[id_b])
+                    if score < PHONE_DUPLICATE_GEOMETRIC_THRESHOLD:
+                        dup_candidates.append((id_a, id_b, score))
+
+        print(f"Dedup stage 2 (geometric): {len(dup_candidates)} confirmed duplicates")
+    except ImportError:
+        print("  imagehash not available, falling back to geometric-only dedup")
+        for i, j in itertools.combinations(range(len(ids)), 2):
+            id_a, id_b = ids[i], ids[j]
+
+            if has_origins and id_a in piece_origins and id_b in piece_origins:
+                oa, ob = piece_origins[id_a], piece_origins[id_b]
+                dist = math.sqrt((oa[0] - ob[0])**2 + (oa[1] - ob[1])**2)
+                if dist > DUPLICATE_CENTROID_DELTA_PX:
+                    skipped_by_origin += 1
+                    continue
+
+            score = _compare(pieces_data[id_a], pieces_data[id_b])
+            if score < PHONE_DUPLICATE_GEOMETRIC_THRESHOLD:
+                dup_candidates.append((id_a, id_b, score))
 
     if has_origins:
         total_pairs = len(ids) * (len(ids) - 1) // 2
         print(f"Dedup: origin filter skipped {skipped_by_origin}/{total_pairs} pairs")
 
-    # Union-Find to group duplicates
     parent = {}
     def find(x):
         while parent.get(x, x) != x:
@@ -323,7 +391,6 @@ def deduplicate_phone(input_path, output_path):
     for id_a, id_b, _ in dup_candidates:
         union(id_a, id_b)
 
-    # Pick one representative per group
     groups = {}
     for pid in pieces_data:
         root = find(pid)
@@ -332,18 +399,33 @@ def deduplicate_phone(input_path, output_path):
     uniques = set()
     dupes = set()
     for root, members in groups.items():
-        # pick the first member as representative
-        best = members[0]
-        uniques.add(best)
+        if len(members) == 1:
+            uniques.add(members[0])
+            continue
+
+        member_metas = [
+            piece_metadata.get(m, {'is_complete': True, 'pixel_count': 0})
+            for m in members
+        ]
+        best = pick_best(member_metas)
+        best_idx = member_metas.index(best)
+        best_id = members[best_idx]
+        uniques.add(best_id)
+
+        if len(members) > 1:
+            _fuse_multi_view(members, pieces_data, input_path, output_path,
+                             best_id)
+
         for m in members:
-            if m != best:
+            if m != best_id:
                 dupes.add(m)
 
     print(f"Dedup: started with {len(pieces_data)}, found {len(dupes)} duplicates, "
           f"resulting in {len(uniques)} unique pieces.")
 
     for pid in uniques:
-        _copy_piece_files(str(input_path), str(output_path), pid)
+        if not os.path.exists(os.path.join(output_path, f'side_{pid}_0.json')):
+            _copy_piece_files(str(input_path), str(output_path), pid)
 
     return len(uniques)
 
@@ -376,3 +458,105 @@ def pick_best(piece_data_list):
         s += d.get('pixel_count', 0)
         return s
     return max(piece_data_list, key=_score)
+
+
+def _fuse_multi_view(members, pieces_data, input_path, output_path, best_id):
+    """
+    Fuse multi-view data from duplicate group members into the best piece.
+
+    Strategy:
+      - Average vertex positions from all views for improved edge accuracy
+      - Merge color features if available
+      - Write fused data to output_path
+
+    Args:
+        members: list of piece IDs in the duplicate group
+        pieces_data: dict {piece_id: [Side, ...]}
+        input_path: source directory
+        output_path: destination directory
+        best_id: the chosen representative piece ID
+    """
+    if len(members) < 2:
+        return
+
+    best_sides = pieces_data[best_id]
+
+    fused_sides = []
+    for si in range(4):
+        all_vertices = []
+        for pid in members:
+            if si < len(pieces_data[pid]):
+                all_vertices.append(pieces_data[pid][si].vertices)
+
+        if len(all_vertices) <= 1:
+            fused_sides.append(best_sides[si])
+            continue
+
+        best_verts = best_sides[si].vertices
+        if len(best_verts) != all_vertices[0].shape[0]:
+            fused_sides.append(best_sides[si])
+            continue
+
+        all_verts_stacked = np.stack(all_vertices, axis=0)
+        avg_verts = np.mean(all_verts_stacked, axis=0)
+
+        max_diff = np.max(np.abs(avg_verts - best_verts))
+        if max_diff < 0.5:
+            fused_sides.append(best_sides[si])
+        else:
+            fused_side = sides.Side(
+                best_id, si, avg_verts,
+                piece_center=best_sides[si].piece_center,
+                is_edge=best_sides[si].is_edge,
+                resample=True, rotate=False,
+                photo_filename=best_sides[si].photo_filename,
+            )
+            fused_sides.append(fused_side)
+
+    if fused_sides != best_sides:
+        for j, side in enumerate(fused_sides):
+            side_file = os.path.join(output_path, f'side_{best_id}_{j}.json')
+            with open(side_file, 'w') as f:
+                json.dump({
+                    'vertices': side.vertices.tolist(),
+                    'piece_center': side.piece_center,
+                    'is_edge': side.is_edge,
+                    'photo_space_origin': (0, 0),
+                    'photo_space_centroid': [0, 0],
+                    'photo_width': 500,
+                    'photo_height': 500,
+                    'original_photo_name': side.photo_filename,
+                }, f)
+        print(f"  Fused {len(members)} views for piece {best_id}")
+
+    color_features_files = []
+    for pid in members:
+        cf_path = os.path.join(
+            str(input_path), f'color_features_{pid}.json'
+        )
+        if os.path.exists(cf_path):
+            color_features_files.append(cf_path)
+
+    if len(color_features_files) >= 2:
+        try:
+            all_features = []
+            for cf_path in color_features_files:
+                with open(cf_path) as f:
+                    all_features.append(json.load(f))
+
+            fused_features = {}
+            for key in all_features[0]:
+                values = [feat[key] for feat in all_features
+                          if key in feat and isinstance(feat[key], (int, float))]
+                if values:
+                    fused_features[key] = sum(values) / len(values)
+                elif key in all_features[0]:
+                    fused_features[key] = all_features[0][key]
+
+            out_cf = os.path.join(
+                output_path, f'color_features_{best_id}.json'
+            )
+            with open(out_cf, 'w') as f:
+                json.dump(fused_features, f)
+        except Exception as e:
+            print(f"  Color feature fusion failed for piece {best_id}: {e}")

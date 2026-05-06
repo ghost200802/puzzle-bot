@@ -36,6 +36,7 @@ def solve(path, start_at=3, puzzle_width=None, puzzle_height=None):
         if puzzle is not None and MODE == 'phone':
             from common import output
             output.generate_solution_grid(puzzle, os.path.join(path, SOLUTION_DIR))
+            output.generate_assembly_guide(puzzle, os.path.join(path, SOLUTION_DIR))
             output.print_solution_summary(puzzle)
 
     if MODE == 'robot' and start_at <= 7:
@@ -57,7 +58,9 @@ def _find_connectivity(input_path, output_path):
     """
     print(f"\n### 4 - Building connectivity ###\n")
     start_time = time.time()
-    connectivity = connect.build(input_path, output_path)
+    use_color = MODE == 'phone'
+    connectivity = connect.build(input_path, output_path,
+                                 use_image_matching=use_color)
     duration = time.time() - start_time
     print(f"Building the graph took {round(duration, 2)} seconds")
     return connectivity
