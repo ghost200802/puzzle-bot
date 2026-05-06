@@ -51,7 +51,10 @@ PHOTO_BMP_DIR = '1_photo_bmps'
 # Step 2 takes in photo BMPs and outputs cleaned up individual pieces as bitmaps
 SEGMENT_DIR = '2_segmented'
 
-# Step 3 takes in piece BMPs and outputs SVGs
+# Step 2b (phone mode): individual piece binary BMPs (intermediate, input to vectorization)
+PIECE_BMP_DIR = '2_piece_bmps'
+
+# Step 3 takes in piece BMPs and outputs SVGs and JSON
 VECTOR_DIR = '3_vector'
 
 # Step 4 goes through all the vector pieces and deletes duplicates

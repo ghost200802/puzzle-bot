@@ -18,7 +18,7 @@ import numpy as np
 
 from common.config import (
     MODE, PUZZLE_WIDTH, PUZZLE_HEIGHT,
-    PHOTOS_DIR, PHOTO_BMP_DIR, SEGMENT_DIR, VECTOR_DIR, DEDUPED_DIR,
+    PHOTOS_DIR, PHOTO_BMP_DIR, SEGMENT_DIR, PIECE_BMP_DIR, VECTOR_DIR, DEDUPED_DIR,
     CONNECTIVITY_DIR, SOLUTION_DIR, TIGHTNESS_DIR,
     MIN_PIECE_AREA, MAX_PIECE_DIMENSIONS, CROP_TOP_RIGHT_BOTTOM_LEFT,
     PHONE_TARGET_PIECE_SIZE,
@@ -72,6 +72,7 @@ def _batch_process_phone(path, serialize=False, id=None,
     path = pathlib.Path(path)
     photos_dir = path.joinpath(PHOTOS_DIR)
     preprocessed_dir = path.joinpath('1_preprocessed')
+    piece_bmp_dir = path.joinpath(PIECE_BMP_DIR)
     vector_dir = path.joinpath(VECTOR_DIR)
     deduped_dir = path.joinpath(DEDUPED_DIR)
 
@@ -130,6 +131,7 @@ def _batch_process_phone(path, serialize=False, id=None,
     # Step 3: Vectorize
     if start_at_step <= 3 and stop_before_step > 3 and all_pieces:
         print(f"\n### 3 - Vectorizing {len(all_pieces)} pieces ###\n")
+        piece_bmp_dir.mkdir(parents=True, exist_ok=True)
         vector_dir.mkdir(parents=True, exist_ok=True)
 
         args = []
@@ -140,7 +142,7 @@ def _batch_process_phone(path, serialize=False, id=None,
                 bmp_data = piece_data
 
             h, w = bmp_data.shape
-            bmp_path = str(vector_dir.joinpath(f'piece_{pid}.bmp'))
+            bmp_path = str(piece_bmp_dir.joinpath(f'piece_{pid}.bmp'))
             save_island_as_bmp(bmp_data, bmp_path)
 
             metadata = {
