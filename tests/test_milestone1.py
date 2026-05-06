@@ -13,6 +13,8 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
+from tests.helpers import create_synthetic_piece_bmp
+
 
 class TestConfig:
     def test_phone_mode_is_default(self):
@@ -336,40 +338,9 @@ class TestDedupe:
 
 
 class TestVectorization:
-    def _create_piece_bmp(self, tmp_path, piece_id=1):
-        from common.find_islands import save_island_as_bmp
-        size = 500
-        binary = np.zeros((size, size), dtype=np.uint8)
-        cx, cy = size // 2, size // 2
-        half = 100
-        binary[cy - half:cy + half, cx - half:cx + half] = 1
-        tab_w = 30
-        tab_h = 40
-        for dy in range(-tab_h // 2, tab_h // 2 + 1):
-            for dx in range(-tab_w // 2, tab_w // 2 + 1):
-                if dx * dx + dy * dy <= (tab_h // 2) ** 2:
-                    ny, nx = cy - half - tab_h // 2 + dy, cx + dx
-                    if 0 <= ny < size and 0 <= nx < size:
-                        binary[ny, nx] = 1
-                    ny, nx = cy + half + tab_h // 2 + dy, cx + dx
-                    if 0 <= ny < size and 0 <= nx < size:
-                        binary[ny, nx] = 1
-        for dy in range(-tab_w // 2, tab_w // 2 + 1):
-            for dx in range(-tab_h // 2, tab_h // 2 + 1):
-                if dx * dx + dy * dy <= (tab_h // 2) ** 2:
-                    ny, nx = cy + dy, cx + half + tab_h // 2 + dx
-                    if 0 <= ny < size and 0 <= nx < size:
-                        binary[ny, nx] = 1
-                    ny, nx = cy + dy, cx - half - tab_h // 2 + dx
-                    if 0 <= ny < size and 0 <= nx < size:
-                        binary[ny, nx] = 1
-        path = str(tmp_path / f'piece_{piece_id}.bmp')
-        save_island_as_bmp(binary, path)
-        return path, binary
-
     def test_vector_from_file(self, tmp_path):
         from common.vector import Vector
-        path, _ = self._create_piece_bmp(tmp_path)
+        path, _ = create_synthetic_piece_bmp(tmp_path)
         v = Vector.from_file(path, id=1)
         assert v.pixels is not None
         assert v.width > 0
@@ -377,7 +348,7 @@ class TestVectorization:
 
     def test_vectorize_full_process(self, tmp_path):
         from common.vector import Vector
-        path, _ = self._create_piece_bmp(tmp_path)
+        path, _ = create_synthetic_piece_bmp(tmp_path)
         v = Vector.from_file(path, id=1)
         v.find_border_raster()
         assert np.sum(v.border) > 0
@@ -479,35 +450,12 @@ class TestEndToEnd:
         from common.preprocess import normalize_piece_size
         from common.vector import Vector
 
-        size = 500
-        binary = np.zeros((size, size), dtype=np.uint8)
-        cx, cy = size // 2, size // 2
-        half = 100
-        binary[cy - half:cy + half, cx - half:cx + half] = 1
-        tab_w = 30
-        tab_h = 40
-        for dy in range(-tab_h // 2, tab_h // 2 + 1):
-            for dx in range(-tab_w // 2, tab_w // 2 + 1):
-                if dx * dx + dy * dy <= (tab_h // 2) ** 2:
-                    ny, nx = cy - half - tab_h // 2 + dy, cx + dx
-                    if 0 <= ny < size and 0 <= nx < size:
-                        binary[ny, nx] = 1
-                    ny, nx = cy + half + tab_h // 2 + dy, cx + dx
-                    if 0 <= ny < size and 0 <= nx < size:
-                        binary[ny, nx] = 1
-        for dy in range(-tab_w // 2, tab_w // 2 + 1):
-            for dx in range(-tab_h // 2, tab_h // 2 + 1):
-                if dx * dx + dy * dy <= (tab_h // 2) ** 2:
-                    ny, nx = cy + dy, cx + half + tab_h // 2 + dx
-                    if 0 <= ny < size and 0 <= nx < size:
-                        binary[ny, nx] = 1
-                    ny, nx = cy + dy, cx - half - tab_h // 2 + dx
-                    if 0 <= ny < size and 0 <= nx < size:
-                        binary[ny, nx] = 1
+        _, binary = create_synthetic_piece_bmp(tmp_path)
+        size = binary.shape[0]
 
         sb, _, _ = normalize_piece_size(binary, np.zeros((size, size, 3), dtype=np.uint8),
                                          target_size=500)
-        bmp_path = str(tmp_path / 'piece_1.bmp')
+        bmp_path = str(tmp_path / 'piece_1_normalized.bmp')
         save_island_as_bmp(sb, bmp_path)
 
         v = Vector.from_file(bmp_path, id=1)
