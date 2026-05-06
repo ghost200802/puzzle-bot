@@ -889,6 +889,20 @@ def normalized_area_between_corners(vertices):
     return sum_distances / len(vertices)
 
 
+def perpendicular_distances_stdev(vertices):
+    """
+    Computes the standard deviation of perpendicular distances from each vertex
+    to the line between the first and last vertex.
+    """
+    p0 = vertices[0]
+    p1 = vertices[-1]
+    distances = [distance_to_line(point=p, start=p0, end=p1) for p in vertices]
+    n = len(distances)
+    mean = sum(distances) / n
+    variance = sum((d - mean) ** 2 for d in distances) / n
+    return math.sqrt(variance)
+
+
 def remove_stragglers(pixels):
     """
     Given a 2D array of binary pixels (already padded), removes any pixels that are "dangling"

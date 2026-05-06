@@ -288,6 +288,7 @@ class Vector(object):
             self.find_four_corners()
             self.extract_four_sides()
             self.enhance_corners()
+            self.classify_edges()
         except Exception as e:
             self.render()
             print(f"Error while processing id {self.id} in file {self.filename}:")
@@ -807,32 +808,18 @@ class Vector(object):
             if vertices[-1] != self.corners[j]:
                 vertices.append(self.corners[j])
 
-            # is this side an edge?
-            # we see how far from a straight line each vertex is
-            # cases that should compute to being an edge:
-            # - perfectly straight line (=> no cumulative area)
-            # - a perfectly straight line, but with a small defect that leads to some jaggedy edges (=> very small area)
-            # cases that should compute to not an edge:
-            # - a normal looking puzzle piece side with a nub sticking out
-            # - a gentle sloping curve (like the shape of a parenthesis)
-            # - a gentle squiggle (like a sine wave)
-            area = util.normalized_area_between_corners(vertices)
-            is_edge = bool(area < 1.8 * self.scalar)
-            side = sides.Side(piece_id=self.id, side_id=None, vertices=vertices, piece_center=self.centroid, is_edge=is_edge)
+            side = sides.Side(piece_id=self.id, side_id=None, vertices=vertices, piece_center=self.centroid, is_edge=False)
             self.sides.append(side)
 
-        # we need to find 4 sides
         if len(self.sides) != 4:
             raise Exception(f"{self.id}: Expected 4 sides, found {len(self.sides)} on piece {self.id}")
 
-        # opposite sides should be parallel
         if abs(self.sides[0].angle - self.sides[2].angle) > SIDE_PARALLEL_THRESHOLD_DEG:
             raise Exception(f"{self.id}: Expected sides 0 and 2 to be parallel, but they are not ({self.sides[0].angle - self.sides[2].angle})")
 
         if abs(self.sides[1].angle - self.sides[3].angle) > SIDE_PARALLEL_THRESHOLD_DEG:
             raise Exception(f"{self.id}: Expected sides 1 and 3 to be parallel, but they are not ({self.sides[1].angle - self.sides[3].angle})")
 
-        # make sure that sides 0 and 1 are roughly at a right angle
         if abs(self.sides[1].angle - self.sides[0].angle - 90 * math.pi/180.0) >  SIDES_ORTHOGONAL_THRESHOLD_DEG:
             raise Exception(f"{self.id}: Expected sides 0 and 1 to be at a right angle, but they are not ({self.sides[1].angle} - {self.sides[0].angle})")
 
@@ -840,6 +827,11 @@ class Vector(object):
         d13 = util.distance_between_segments(self.sides[0].segment, self.sides[2].segment)
         if d02 > 1.35 * d13 or d13 > 1.35 * d02:
             raise Exception(f"{self.id}: Expected the piece to be roughly square, but the distance between sides is not comparable ({d02} vs {d13})")
+
+    def classify_edges(self):
+        for side in self.sides:
+            stdev = util.perpendicular_distances_stdev(side.vertices)
+            side.is_edge = bool(stdev < 1.8 * self.scalar)
 
         edge_count = sum([s.is_edge for s in self.sides])
         if edge_count > 2:
