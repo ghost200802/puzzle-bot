@@ -221,15 +221,16 @@ def build(connectivity=None, input_path=None, output_path=None,
 
     print(f"Corners: {corners}, Edges: {len(edges)}")
     if len(corners) != 4:
-        raise Exception(f"Expected 4 corners, got {len(corners)}")
+        print(f"Warning: Expected 4 corners, got {len(corners)}. Attempting partial solve...")
     if len(edges) != edge_length:
-        raise Exception(f"Expected {edge_length} pieces on the edge, got {len(edges)}")
+        print(f"Warning: Expected {edge_length} pieces on the edge, got {len(edges)}")
 
     success = False
     solution = None
 
     total_expected = pw * ph
     is_incomplete = len(ps) < total_expected
+    is_corner_incomplete = len(corners) != 4
 
     if is_incomplete:
         print(f"Warning: only {len(ps)}/{total_expected} pieces available, "
@@ -241,22 +242,22 @@ def build(connectivity=None, input_path=None, output_path=None,
     corners = sorted(
         corners,
         key=lambda c: sum([len(fits) for fits in ps[c]]),
-        reverse=True # Sort in Descending order
+        reverse=True
     )
 
+    if not is_corner_incomplete and not is_incomplete:
+        for i in range(0, 4):
+            try:
+                solution = build_from_corner(ps, start_piece_id=corners[i], edge_length=edge_length,
+                                             puzzle_width=pw, puzzle_height=ph)
+            except Exception as e:
+                print(f"Failed to build from corner {i}: {e}")
+                continue
+            success = True
+            break
 
-    for i in range(0, 4):
-        try:
-            solution = build_from_corner(ps, start_piece_id=corners[i], edge_length=edge_length,
-                                         puzzle_width=pw, puzzle_height=ph)
-        except Exception as e:
-            print(f"Failed to build from corner {i}: {e}")
-            continue
-        success = True
-        break
-
-    if not success and is_incomplete:
-        print("Full solve failed with incomplete pieces, trying partial solve...")
+    if not success:
+        print("Attempting partial solve...")
         try:
             solution = build_partial(ps, puzzle_width=pw, puzzle_height=ph)
             if solution is not None and solution.placed_count > 0:
