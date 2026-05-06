@@ -52,10 +52,10 @@ def main():
         parser.add_argument('--target', required=False, default=None,
                             help='Path to target image (box photo)',
                             type=str)
-        parser.add_argument('--width', required=True, type=int,
-                            help='Puzzle width (number of columns)')
-        parser.add_argument('--height', required=True, type=int,
-                            help='Puzzle height (number of rows)')
+        parser.add_argument('--width', required=False, default=None, type=int,
+                            help='Puzzle width (number of columns). Auto-detected if omitted.')
+        parser.add_argument('--height', required=False, default=None, type=int,
+                            help='Puzzle height (number of rows). Auto-detected if omitted.')
         parser.add_argument('--output-dir', default='output', type=str,
                             help='Output directory')
         parser.add_argument('--segmentation', default='adaptive',

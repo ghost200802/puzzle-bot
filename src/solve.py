@@ -4,6 +4,7 @@ Given a path to processed piece data, finds a solution
 
 import os
 import time
+import math
 
 from common import board, connect, util
 from common.config import (
@@ -11,10 +12,52 @@ from common.config import (
 )
 
 
+def infer_grid_size(piece_count):
+    """
+    Infer puzzle grid dimensions from the number of unique pieces.
+    Finds the most square-like w * h >= piece_count.
+    """
+    if piece_count <= 0:
+        return 1, 1
+
+    best = None
+    best_diff = float('inf')
+    for w in range(1, int(math.sqrt(piece_count)) + 3):
+        h = math.ceil(piece_count / w)
+        if w * h >= piece_count:
+            diff = abs(w - h) + (w * h - piece_count) * 0.1
+            if diff < best_diff:
+                best_diff = diff
+                best = (w, h)
+
+    if best is None:
+        s = int(math.ceil(math.sqrt(piece_count)))
+        best = (s, s)
+
+    return best
+
+
 def solve(path, start_at=3, puzzle_width=None, puzzle_height=None):
     """
     Given a path to processed piece data, finds a solution.
+    If puzzle_width/height are not provided, auto-detects from piece count.
     """
+    if puzzle_width is None or puzzle_height is None:
+        deduped_dir = os.path.join(path, DEDUPED_DIR)
+        piece_files = [f for f in os.listdir(deduped_dir)
+                       if f.startswith('side_') and f.endswith('_0.json')]
+        piece_count = len(set(
+            int(f.split('_')[1]) for f in piece_files
+        ))
+
+        if puzzle_width is None or puzzle_height is None:
+            auto_w, auto_h = infer_grid_size(piece_count)
+            print(f"Auto-detected {piece_count} pieces -> grid {auto_w}x{auto_h}")
+            if puzzle_width is None:
+                puzzle_width = auto_w
+            if puzzle_height is None:
+                puzzle_height = auto_h
+
     if start_at <= 5:
         connectivity = _find_connectivity(
             input_path=os.path.join(path, DEDUPED_DIR),

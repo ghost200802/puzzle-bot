@@ -104,8 +104,7 @@ def _batch_process_phone(path, serialize=False, id=None,
             bgr = np.load(str(preprocessed_dir.joinpath(f'{photo_id}_bgr.npy')))
 
         if start_at_step <= 1 and stop_before_step > 1:
-            binary = segment_phone.segment_photo(gray, bgr=bgr,
-                                                  method=segmentation_method)
+            binary = segment_phone.segment_with_fallback(gray, bgr)
             np.save(str(preprocessed_dir.joinpath(f'{photo_id}_binary.npy')), binary)
         else:
             binary = np.load(str(preprocessed_dir.joinpath(f'{photo_id}_binary.npy')))
@@ -118,11 +117,13 @@ def _batch_process_phone(path, serialize=False, id=None,
             for piece in pieces:
                 piece_binary_rescaled, piece_color_rescaled, _ = \
                     preprocess.normalize_piece_size(
-                        piece.binary, piece.color,
+                        piece.binary, gray, piece.origin,
+                        color=piece.color,
                         target_size=PHONE_TARGET_PIECE_SIZE
                     )
                 piece.binary = piece_binary_rescaled
-                piece.color = piece_color_rescaled
+                if piece_color_rescaled is not None:
+                    piece.color = piece_color_rescaled
                 all_pieces.append((piece_id_counter, piece))
                 piece_id_counter += 1
 

@@ -75,7 +75,7 @@ if MODE == 'phone':
     PHONE_ADAPTIVE_BLOCK_SIZE = 51    # Adaptive threshold block size (must be odd)
     PHONE_ADAPTIVE_C = 10             # Adaptive threshold constant subtracted from mean
     PHONE_MIN_PIECE_AREA_RATIO = 0.005  # Minimum piece area as ratio of image area
-    PHONE_TARGET_PIECE_SIZE = 500     # Target size for piece normalization
+    PHONE_TARGET_PIECE_SIZE = 945     # Target size for piece normalization
     # Deduplication
     PHONE_HASH_THRESHOLD = 15         # Perceptual hash distance threshold
     PHONE_DUPLICATE_GEOMETRIC_THRESHOLD = 2.2  # Geometric similarity threshold for dedup

@@ -44,6 +44,31 @@ def detect_bg_brightness(gray):
     return 'light' if median_val > PHONE_BG_BRIGHTNESS_THRESHOLD else 'dark'
 
 
+def _adaptive_params(gray):
+    """
+    Compute adaptive threshold parameters based on image size.
+    For smaller images, use a smaller block size to better separate pieces.
+    """
+    h, w = gray.shape
+    max_dim = max(h, w)
+    ref_dim = 3000
+    scale = max_dim / ref_dim
+
+    block_size = max(3, int(PHONE_ADAPTIVE_BLOCK_SIZE * scale))
+    if block_size % 2 == 0:
+        block_size += 1
+
+    blur = max(3, int(PHONE_BLUR_KERNEL * scale))
+    if blur % 2 == 0:
+        blur += 1
+
+    morph = max(3, int(PHONE_MORPH_KERNEL * scale))
+    if morph % 2 == 0:
+        morph += 1
+
+    return block_size, blur, morph
+
+
 def segment_adaptive(gray, bg_brightness=None):
     """
     Segment using OpenCV adaptive threshold.
@@ -52,8 +77,10 @@ def segment_adaptive(gray, bg_brightness=None):
     if bg_brightness is None:
         bg_brightness = detect_bg_brightness(gray)
 
+    block_size, blur_size, morph_size = _adaptive_params(gray)
+
     blurred = cv2.GaussianBlur(
-        gray, (PHONE_BLUR_KERNEL, PHONE_BLUR_KERNEL), 0
+        gray, (blur_size, blur_size), 0
     )
 
     if bg_brightness == 'light':
@@ -61,7 +88,7 @@ def segment_adaptive(gray, bg_brightness=None):
             blurred, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV,
-            blockSize=PHONE_ADAPTIVE_BLOCK_SIZE,
+            blockSize=block_size,
             C=PHONE_ADAPTIVE_C
         )
     else:
@@ -69,13 +96,13 @@ def segment_adaptive(gray, bg_brightness=None):
             blurred, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY,
-            blockSize=PHONE_ADAPTIVE_BLOCK_SIZE,
+            blockSize=block_size,
             C=PHONE_ADAPTIVE_C
         )
 
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,
-        (PHONE_MORPH_KERNEL, PHONE_MORPH_KERNEL)
+        (morph_size, morph_size)
     )
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
@@ -90,8 +117,10 @@ def segment_otsu(gray, bg_brightness=None):
     if bg_brightness is None:
         bg_brightness = detect_bg_brightness(gray)
 
+    _, blur_size, morph_size = _adaptive_params(gray)
+
     blurred = cv2.GaussianBlur(
-        gray, (PHONE_BLUR_KERNEL, PHONE_BLUR_KERNEL), 0
+        gray, (blur_size, blur_size), 0
     )
 
     if bg_brightness == 'light':
@@ -107,7 +136,7 @@ def segment_otsu(gray, bg_brightness=None):
 
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,
-        (PHONE_MORPH_KERNEL, PHONE_MORPH_KERNEL)
+        (morph_size, morph_size)
     )
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
@@ -156,8 +185,8 @@ def segment_photo(gray, bgr=None, method='adaptive'):
 def segment_with_fallback(gray, bgr=None, min_piece_pixels=100):
     """
     Try multiple segmentation methods and return the best result.
+    Evaluates each result's quality and picks the one with the best score.
     Falls back from adaptive -> otsu -> grabcut.
-    Selects the result with the most reasonable number of piece pixels.
     """
     results = []
 
@@ -165,25 +194,32 @@ def segment_with_fallback(gray, bgr=None, min_piece_pixels=100):
         try:
             binary = segment_photo(gray, bgr=bgr, method=method)
             n_pixels = np.sum(binary == 1)
-            if n_pixels >= min_piece_pixels:
-                results.append((method, binary, n_pixels))
+            if n_pixels < min_piece_pixels:
+                continue
+            quality = evaluate_segmentation_quality(binary, gray)
+            results.append((method, binary, n_pixels, quality))
         except Exception:
             continue
 
-    if bgr is not None and not results:
+    if bgr is not None:
         try:
             binary = segment_grabcut(bgr)
             n_pixels = np.sum(binary == 1)
             if n_pixels >= min_piece_pixels:
-                results.append(('grabcut', binary, n_pixels))
+                quality = evaluate_segmentation_quality(binary, gray)
+                results.append(('grabcut', binary, n_pixels, quality))
         except Exception:
             pass
 
     if not results:
         return np.zeros_like(gray, dtype=np.uint8)
 
-    results.sort(key=lambda x: x[2], reverse=True)
-    return results[0][1]
+    results.sort(key=lambda x: x[3]['overall_score'], reverse=True)
+    best = results[0]
+    print(f"  Segmentation: method={best[0]}, pieces={best[3]['piece_count']}, "
+          f"score={best[3]['overall_score']:.2f}, "
+          f"issues={best[3]['issues']}")
+    return best[1]
 
 
 def evaluate_segmentation_quality(binary, gray, expected_piece_area_ratio=0.005):

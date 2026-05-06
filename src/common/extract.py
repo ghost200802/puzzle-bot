@@ -56,6 +56,13 @@ def extract_pieces_from_segmented(binary, color_image, photo_id,
     cleaned = remove_stragglers(binary.copy())
     islands = extract_islands(cleaned, min_area, ignore_border=False)
 
+    if len(islands) == 0:
+        lower_min = max(50, min_area // 10)
+        islands = extract_islands(cleaned, lower_min, ignore_border=False)
+        if len(islands) > 0:
+            print(f"  Extraction: lowered min_area {min_area}->{lower_min}, "
+                  f"found {len(islands)} pieces")
+
     pieces = []
     for island_mask, origin_row, origin_col, touches_border in islands:
         bh, bw = island_mask.shape

@@ -330,10 +330,11 @@ class RealTimeIdentifier:
         for piece in pieces:
             if piece.pixel_count < 500:
                 continue
-            sb, sc, _ = normalize_piece_size(piece.binary, piece.color,
-                                              target_size=200)
+            sb, sc, _ = normalize_piece_size(piece.binary, gray, piece.origin,
+                                              color=piece.color, target_size=200)
             piece.binary = sb
-            piece.color = sc
+            if sc is not None:
+                piece.color = sc
             result = self.matcher.match(piece)
             results.append(result)
 
@@ -359,10 +360,11 @@ class RealTimeIdentifier:
         for piece in pieces:
             if piece.pixel_count < 500:
                 continue
-            sb, sc, _ = normalize_piece_size(piece.binary, piece.color,
-                                              target_size=200)
+            sb, sc, _ = normalize_piece_size(piece.binary, gray, piece.origin,
+                                              color=piece.color, target_size=200)
             piece.binary = sb
-            piece.color = sc
+            if sc is not None:
+                piece.color = sc
             result = self.matcher.match(piece)
             results.append(result)
 

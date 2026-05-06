@@ -91,17 +91,20 @@ class TestPreprocess:
         from common.preprocess import normalize_piece_size
         binary = np.zeros((200, 300), dtype=np.uint8)
         binary[50:150, 80:220] = 1
-        color = np.random.randint(0, 255, (200, 300, 3), dtype=np.uint8)
-        sb, sc, scale = normalize_piece_size(binary, color, target_size=100)
+        gray_full = np.random.randint(100, 200, (500, 600), dtype=np.uint8)
+        gray_full[50:150, 80:220] = 240
+        sb, sc, scale = normalize_piece_size(binary, gray_full, origin=(0, 0),
+                                              color=np.random.randint(0, 255, (200, 300, 3), dtype=np.uint8),
+                                              target_size=100)
         max_dim = max(sb.shape[0], sb.shape[1])
-        assert max_dim <= 110
+        assert max_dim <= 120
         assert scale != 1.0
 
     def test_normalize_piece_size_no_piece(self):
         from common.preprocess import normalize_piece_size
         binary = np.zeros((100, 100), dtype=np.uint8)
-        color = np.zeros((100, 100, 3), dtype=np.uint8)
-        sb, sc, scale = normalize_piece_size(binary, color)
+        gray_full = np.zeros((200, 200), dtype=np.uint8)
+        sb, sc, scale = normalize_piece_size(binary, gray_full, origin=(0, 0))
         assert scale == 1.0
 
     def test_normalize_piece_color(self):
@@ -456,7 +459,9 @@ class TestEndToEnd:
         _, binary = create_synthetic_piece_bmp(tmp_path)
         size = binary.shape[0]
 
-        sb, _, _ = normalize_piece_size(binary, np.zeros((size, size, 3), dtype=np.uint8),
+        gray_full = np.full((size * 2, size * 2), 30, dtype=np.uint8)
+        gray_full[:size, :size][binary == 1] = 240
+        sb, _, _ = normalize_piece_size(binary, gray_full, origin=(0, 0),
                                          target_size=500)
         bmp_path = str(tmp_path / 'piece_1_normalized.bmp')
         save_island_as_bmp(sb, bmp_path)
@@ -518,7 +523,8 @@ class TestEndToEnd:
 
         for piece in pieces:
             sb, sc, scale = normalize_piece_size(
-                piece.binary, piece.color, target_size=500
+                piece.binary, gray, piece.origin,
+                color=piece.color, target_size=500
             )
             assert sb.shape[0] <= 520
             assert sb.shape[1] <= 520

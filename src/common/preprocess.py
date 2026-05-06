@@ -69,35 +69,86 @@ def preprocess_phone_photo(photo_path):
     return bgr, gray
 
 
-def normalize_piece_size(binary, color, target_size=500):
+def normalize_piece_size(binary, gray_full, origin, color=None, target_size=500):
     """
-    Crop to bounding box and scale a piece so its larger dimension equals target_size.
-    Returns (scaled_binary, scaled_color, scale_factor).
+    Crop from original grayscale image at origin, scale up with INTER_CUBIC,
+    then Gaussian blur + Otsu re-thresholding for clean smooth edges.
+    This matches run_pipeline.py's high-quality two-pass approach.
+
+    Args:
+        binary: uint8 0/1 mask of the piece (from segmentation)
+        gray_full: full-resolution grayscale image (original, unmasked)
+        origin: (col, row) top-left of the island in the full image
+        color: optional BGR crop for color rescaling (same shape as binary)
+        target_size: target max dimension after scaling
+
+    Returns: (scaled_binary, scaled_color_or_None, scale_factor)
     """
+    from scipy.ndimage import label as ndlabel
+
     ys, xs = np.where(binary == 1)
     if len(xs) == 0:
         return binary, color, 1.0
-    min_x, max_x = xs.min(), xs.max()
-    min_y, max_y = ys.min(), ys.max()
-    binary_crop = binary[min_y:max_y + 1, min_x:max_x + 1].copy()
-    if color.shape[:2] == binary.shape:
-        color_crop = color[min_y:max_y + 1, min_x:max_x + 1].copy()
-    else:
-        color_crop = color.copy()
-    h, w = binary_crop.shape
-    max_dim = max(w, h)
+
+    local_min_x, local_max_x = int(xs.min()), int(xs.max())
+    local_min_y, local_max_y = int(ys.min()), int(ys.max())
+    origin_col, origin_row = origin
+
+    bh, bw = binary.shape
+    img_x0 = origin_col + local_min_x
+    img_y0 = origin_row + local_min_y
+    img_x1 = origin_col + local_max_x + 1
+    img_y1 = origin_row + local_max_y + 1
+
+    piece_w = local_max_x - local_min_x + 1
+    piece_h = local_max_y - local_min_y + 1
+    pad = max(3, int(max(piece_w, piece_h) * 0.05))
+
+    img_x0 = max(0, img_x0 - pad)
+    img_y0 = max(0, img_y0 - pad)
+    img_x1 = min(gray_full.shape[1], img_x1 + pad)
+    img_y1 = min(gray_full.shape[0], img_y1 + pad)
+
+    orig_crop = gray_full[img_y0:img_y1, img_x0:img_x1]
+    crop_h, crop_w = orig_crop.shape
+    max_dim = max(crop_w, crop_h)
     if max_dim == 0:
-        return binary_crop, color_crop, 1.0
+        return binary, color, 1.0
+
     scale = target_size / max_dim
     if abs(scale - 1.0) < 0.01:
-        return binary_crop, color_crop, 1.0
-    new_w = max(int(w * scale), 1)
-    new_h = max(int(h * scale), 1)
-    scaled_binary = cv2.resize(binary_crop.astype(np.uint8) * 255, (new_w, new_h),
-                               interpolation=cv2.INTER_NEAREST)
-    scaled_binary = (scaled_binary > 127).astype(np.uint8)
-    scaled_color = cv2.resize(color_crop, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    return scaled_binary, scaled_color, scale
+        _, smooth_binary = cv2.threshold(
+            orig_crop, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        smooth_binary = (smooth_binary > 127).astype(np.uint8)
+        return smooth_binary, color, 1.0
+
+    new_w = max(int(crop_w * scale), 10)
+    new_h = max(int(crop_h * scale), 10)
+
+    scaled = cv2.resize(orig_crop, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+
+    blur_k = max(3, int(scale * 0.8))
+    if blur_k % 2 == 0:
+        blur_k += 1
+    blurred = cv2.GaussianBlur(scaled, (blur_k, blur_k), 0)
+
+    _, smooth_binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    smooth_binary = (smooth_binary > 127).astype(np.uint8)
+
+    kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    smooth_binary = cv2.morphologyEx(smooth_binary, cv2.MORPH_OPEN, kern)
+    smooth_binary = cv2.morphologyEx(smooth_binary, cv2.MORPH_CLOSE, kern)
+
+    lbl, n = ndlabel(smooth_binary)
+    if n > 1:
+        best = max(range(1, n + 1), key=lambda j: np.sum(lbl == j))
+        smooth_binary = (lbl == best).astype(np.uint8)
+
+    scaled_color = None
+    if color is not None:
+        scaled_color = cv2.resize(color, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+
+    return smooth_binary, scaled_color, scale
 
 
 def normalize_piece_color(color_image, mask):
