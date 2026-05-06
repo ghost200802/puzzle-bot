@@ -1,6 +1,4 @@
 import os
-import json
-import math
 import heapq
 
 from common.config import *
@@ -84,7 +82,7 @@ class Board(object):
             return False
         return self._board[y][x] is None
 
-    def can_place(self, piece_id, fits, x, y, orientation):
+    def can_place(self, piece_id, fits, x, y, orientation, relax_edge_constraints=False):
         if x < 0 or x >= self.width or y < 0 or y >= self.height:
             return False, f"Cannot place {piece_id} at ({x}, {y}) because it is outside the board"
 
@@ -102,7 +100,7 @@ class Board(object):
             is_edge = len(fits_i) == 0
             if not is_edge and expect_edge:
                 return False, f"Cannot place {piece_id} at ({x}, {y}) because side @ index {rotated_i} is not an edge piece"
-            elif is_edge and not expect_edge:
+            elif is_edge and not expect_edge and not relax_edge_constraints:
                 return False, f"Cannot place {piece_id} at ({x}, {y}) because side @ index {rotated_i} is an edge but it shouldn't be"
 
         # check connectivity of neighbors
@@ -356,6 +354,113 @@ def _orient_start_corner_to_top_left(p):
     else:
         raise ValueError(f"Piece {p} is not a corner piece")
 
+def _try_place_at(board, ps, x, y):
+    if not board.is_available(x, y):
+        return False, board
+
+    neighbor_constraints = []
+    for dx, dy, neighbor_facing_us, our_facing_neighbor in [
+        (-1, 0, RIGHT, LEFT), (1, 0, LEFT, RIGHT),
+        (0, -1, BOTTOM, TOP), (0, 1, TOP, BOTTOM),
+    ]:
+        nx, ny = x + dx, y + dy
+        neighbor = board.get(nx, ny)
+        if neighbor is not None:
+            neighbor_pid, _, neighbor_ori = neighbor
+            neighbor_fits = ps[neighbor_pid][(neighbor_facing_us - neighbor_ori) % 4]
+            neighbor_constraints.append((neighbor_pid, neighbor_fits, our_facing_neighbor))
+
+    if not neighbor_constraints:
+        return False, board
+
+    active_constraints = [(pid, fits, opp) for pid, fits, opp in neighbor_constraints
+                          if len(fits) > 0]
+
+    if not active_constraints:
+        return False, board
+
+    candidate_pieces = None
+    for neighbor_pid, neighbor_fits, opp_side in active_constraints:
+        matching_pids = set()
+        for n_pid, n_side, n_error in neighbor_fits:
+            if n_pid not in board._placed_piece_ids:
+                matching_pids.add((n_pid, n_side, n_error))
+        if candidate_pieces is None:
+            candidate_pieces = matching_pids
+        else:
+            candidate_pieces = candidate_pieces.intersection(
+                {(p[0], p[1], p[2]) for p in matching_pids}
+            )
+
+    if not candidate_pieces:
+        return False, board
+
+    candidates = []
+    for n_pid, n_side, n_error in candidate_pieces:
+        best_opp = None
+        conflict = False
+        for _, neighbor_fits, opp_side in active_constraints:
+            found = False
+            for f_pid, f_side, f_error in neighbor_fits:
+                if f_pid == n_pid:
+                    orientation = (opp_side - f_side) % 4
+                    if best_opp is not None and orientation != best_opp:
+                        conflict = True
+                        break
+                    best_opp = orientation
+                    found = True
+                    break
+            if conflict or not found:
+                conflict = True
+                break
+        if not conflict and best_opp is not None:
+            ok, _ = board.can_place(n_pid, ps[n_pid], x, y, best_opp,
+                                     relax_edge_constraints=True)
+            if ok:
+                candidates.append((n_error, n_pid, best_opp))
+
+    if candidates:
+        candidates.sort()
+        _, best_pid, best_ori = candidates[0]
+        board.place(best_pid, ps[best_pid], x, y, best_ori)
+        return True, board
+
+    return False, board
+
+
+def _fill_interior(board, ps, puzzle_width, puzzle_height):
+    pw, ph = puzzle_width, puzzle_height
+    total_before = board.placed_count
+    improved = True
+    pass_num = 0
+
+    while improved:
+        improved = False
+        pass_num += 1
+        for y in range(1, ph - 1):
+            for x in range(1, pw - 1):
+                if board.get(x, y) is not None:
+                    continue
+                has_neighbor = False
+                for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    if board.get(x + dx, y + dy) is not None:
+                        has_neighbor = True
+                        break
+                if not has_neighbor:
+                    continue
+                placed, board = _try_place_at(board, ps, x, y)
+                if placed:
+                    improved = True
+
+    total_after = board.placed_count
+    if total_after > total_before:
+        print(f"  Interior fill placed {total_after - total_before} more pieces "
+              f"(total: {total_after})")
+    else:
+        print(f"  Interior fill: no improvement ({pass_num} passes, {total_before} placed)")
+
+    return board
+
 
 def build_partial(ps, puzzle_width=None, puzzle_height=None):
     """
@@ -365,7 +470,8 @@ def build_partial(ps, puzzle_width=None, puzzle_height=None):
       1. Find corner pieces and start building from the best corner
       2. Skip empty positions where no piece fits (missing pieces)
       3. Continue building around gaps
-      4. Return the best partial solution found
+      4. Fill interior positions greedily
+      5. Return the best partial solution found
 
     Args:
         ps: connectivity graph {piece_id: [[fits], ...]}
@@ -514,6 +620,9 @@ def build_partial(ps, puzzle_width=None, puzzle_height=None):
                     break
             else:
                 x, y = next_x, next_y
+
+        print(f"  Border phase placed {board.placed_count} pieces, filling interior...")
+        board = _fill_interior(board, ps, pw, ph)
 
         if board.placed_count > best_count:
             best_count = board.placed_count

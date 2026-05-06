@@ -78,8 +78,12 @@ def solve(path, start_at=3, puzzle_width=None, puzzle_height=None):
         # Generate phone mode outputs
         if puzzle is not None and MODE == 'phone':
             from common import output
-            output.generate_solution_grid(puzzle, os.path.join(path, SOLUTION_DIR))
-            output.generate_assembly_guide(puzzle, os.path.join(path, SOLUTION_DIR))
+            solution_dir = os.path.join(path, SOLUTION_DIR)
+            output.generate_solution_grid(puzzle, solution_dir)
+            output.generate_solution_svg(
+                puzzle, os.path.join(path, DEDUPED_DIR), solution_dir
+            )
+            output.generate_assembly_guide(puzzle, solution_dir)
             output.print_solution_summary(puzzle)
 
     if MODE == 'robot' and start_at <= 7:

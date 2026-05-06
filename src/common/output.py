@@ -169,6 +169,289 @@ def _piece_card(piece):
             f'</div>')
 
 
+def generate_solution_svg(board, deduped_dir, output_dir):
+    """
+    Generate a combined SVG showing all placed pieces on the board.
+    Uses continuous angle propagation (same approach as move.py):
+    spiral through the board, align each piece to its already-placed
+    neighbor using actual edge geometry angles.
+    """
+    import json
+    from common import util
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    pw, ph = board.width, board.height
+    side_colors = ['cc0000', '999900', '00aa99', '3300bb']
+
+    def _angle(p1, p2):
+        return math.atan2(p2[1] - p1[1], p2[0] - p1[0])
+
+    def _rotate_polyline(polyline, around, angle):
+        return [util.rotate(pt, around, angle) for pt in polyline]
+
+    def _translate_polyline(polyline, tx, ty):
+        return [(x + tx, y + ty) for x, y in polyline]
+
+    x, y = 0, 0
+    directions = [(1, 0), (0, 1), (-1, 0), (0, -1)]
+    direction = directions[0]
+
+    placed_pieces = {}
+    viz_data = []
+    spiral_width, spiral_height = 0, 0
+
+    piece_sides_cache = {}
+
+    for _ in range(pw * ph):
+        cell = board.get(x, y)
+        if cell is None:
+            next_x, next_y = x + direction[0], y + direction[1]
+            if next_x < 0 or next_x >= pw or next_y < 0 or next_y >= ph or placed_pieces.get((next_x, next_y)):
+                direction = directions[(directions.index(direction) + 1) % 4]
+            x, y = x + direction[0], y + direction[1]
+            continue
+
+        piece_id, fits, orientation = cell
+
+        if piece_id not in piece_sides_cache:
+            sides = []
+            for i in range(4):
+                json_path = os.path.join(deduped_dir, f'side_{piece_id}_{i}.json')
+                if not os.path.exists(json_path):
+                    sides.append(None)
+                    continue
+                with open(json_path, 'r') as f:
+                    sides.append(json.load(f))
+            piece_sides_cache[piece_id] = sides
+        sides = piece_sides_cache[piece_id]
+
+        if y == 0:
+            placed_pieces[(x, y - 1)] = [[], [], [(100, 0), (0, 0)], []]
+        if x == 0:
+            placed_pieces[(x - 1, y)] = [[], [(0, 0), (0, 100)], [], []]
+        if x == pw - 1:
+            placed_pieces[(x + 1, y)] = [[], [], [], [(spiral_width, 100), (spiral_width, 0)]]
+        if y == ph - 1:
+            placed_pieces[(x, y + 1)] = [[(0, spiral_height), (100, spiral_height)], [], [], []]
+
+        neighbor_above = placed_pieces.get((x, y - 1), [[], [], [], []])[2]
+        neighbor_right = placed_pieces.get((x + 1, y), [[], [], [], []])[3]
+        neighbor_below = placed_pieces.get((x, y + 1), [[], [], [], []])[0]
+        neighbor_left = placed_pieces.get((x - 1, y), [[], [], [], []])[1]
+
+        neighbor_above_angle = _angle(neighbor_above[0], neighbor_above[-1]) % (2 * math.pi) if neighbor_above else None
+        neighbor_right_angle = _angle(neighbor_right[0], neighbor_right[-1]) % (2 * math.pi) if neighbor_right else None
+        neighbor_below_angle = _angle(neighbor_below[0], neighbor_below[-1]) % (2 * math.pi) if neighbor_below else None
+        neighbor_left_angle = _angle(neighbor_left[0], neighbor_left[-1]) % (2 * math.pi) if neighbor_left else None
+
+        side_angles = []
+        for side in sides:
+            if side is None:
+                side_angles.append(None)
+                continue
+            verts = side['vertices']
+            side_angles.append(_angle(verts[0], verts[-1]) % (2 * math.pi))
+
+        new_sides = util.rotate_list([0, 1, 2, 3], -orientation)
+        new_top, new_right, new_bottom, new_left = new_sides
+
+        rotations = []
+        if neighbor_above_angle is not None and side_angles[new_top] is not None:
+            rotations.append(neighbor_above_angle - side_angles[new_top] - math.pi)
+        if neighbor_right_angle is not None and side_angles[new_right] is not None:
+            rotations.append(neighbor_right_angle - side_angles[new_right] - math.pi)
+        if neighbor_below_angle is not None and side_angles[new_bottom] is not None:
+            rotations.append(neighbor_below_angle - side_angles[new_bottom] - math.pi)
+        if neighbor_left_angle is not None and side_angles[new_left] is not None:
+            rotations.append(neighbor_left_angle - side_angles[new_left] - math.pi)
+
+        if rotations:
+            rotation = util.average_angles(rotations)
+        elif x == 0 and y == 0:
+            rotation = -side_angles[new_top] if side_angles[new_top] is not None else 0
+        else:
+            rotation = 0
+
+        ic = sides[0]['incenter'] if sides[0] else (0, 0)
+        rotated_sides = []
+        for side in sides:
+            if side is None:
+                rotated_sides.append([])
+                continue
+            rotated_sides.append(_rotate_polyline(side['vertices'], ic, rotation))
+
+        if y == 0:
+            if neighbor_left:
+                origin_x = neighbor_left[0][0]
+            else:
+                origin_x = 0
+            origin_y = 0
+            w = rotated_sides[new_top][-1][0] - rotated_sides[new_top][0][0]
+            neighbor_above = [(origin_x + w, origin_y), (origin_x, origin_y)]
+        if x == pw - 1:
+            if y == 0:
+                piece_width = rotated_sides[new_top][-1][0] - rotated_sides[new_top][0][0]
+                if neighbor_left:
+                    spiral_width = neighbor_left[0][0] + piece_width
+                else:
+                    spiral_width = piece_width
+            origin_x = spiral_width
+            if neighbor_above:
+                origin_y = neighbor_above[0][1]
+            else:
+                origin_y = 0
+            h = rotated_sides[new_right][-1][1] - rotated_sides[new_right][0][1]
+            neighbor_right = [(origin_x, origin_y + h), (origin_x, origin_y)]
+        if y == ph - 1:
+            if x == pw - 1:
+                piece_height = rotated_sides[new_right][-1][1] - rotated_sides[new_right][0][1]
+                if neighbor_above:
+                    spiral_height = neighbor_above[0][1] + piece_height
+                else:
+                    spiral_height = piece_height
+            if neighbor_right:
+                origin_x = neighbor_right[0][0]
+            else:
+                origin_x = spiral_width
+            origin_y = spiral_height
+            w = rotated_sides[new_bottom][-1][0] - rotated_sides[new_bottom][0][0]
+            neighbor_below = [(origin_x - w, origin_y), (origin_x, origin_y)]
+        if x == 0 and y != 0:
+            if y == ph - 1:
+                origin_x = 0
+                origin_y = spiral_height
+                w = rotated_sides[new_bottom][0][0] - rotated_sides[new_bottom][-1][0]
+            else:
+                origin_x = 0
+                if neighbor_below:
+                    origin_y = neighbor_below[0][1]
+                else:
+                    origin_y = 0
+            h = rotated_sides[new_left][-1][1] - rotated_sides[new_left][0][1]
+            neighbor_left = [(origin_x, origin_y - h), (origin_x, origin_y)]
+
+        samples = []
+        if neighbor_above:
+            samples.append(util.subtract(neighbor_above[-1], rotated_sides[new_top][0]))
+        if neighbor_right:
+            samples.append(util.subtract(neighbor_right[-1], rotated_sides[new_right][0]))
+        if neighbor_below:
+            samples.append(util.subtract(neighbor_below[-1], rotated_sides[new_bottom][0]))
+        if neighbor_left:
+            samples.append(util.subtract(neighbor_left[-1], rotated_sides[new_left][0]))
+
+        if x == 0 and y == 0:
+            translation = util.subtract((0, 0), rotated_sides[new_top][0])
+        elif samples:
+            translation = util.multimidpoint(samples)
+        else:
+            translation = (0, 0)
+
+        incenter = (ic[0] + translation[0], ic[1] + translation[1])
+        translated_rotated_sides = [util.translate_polyline(side, translation) for side in rotated_sides]
+
+        placed_pieces[(x, y)] = [
+            translated_rotated_sides[new_top],
+            translated_rotated_sides[new_right],
+            translated_rotated_sides[new_bottom],
+            translated_rotated_sides[new_left]
+        ]
+
+        edge_sides = set()
+        if y == 0:
+            edge_sides.add(0)
+        if y == ph - 1:
+            edge_sides.add(2)
+        if x == 0:
+            edge_sides.add(3)
+        if x == pw - 1:
+            edge_sides.add(1)
+
+        for side_idx in range(4):
+            is_edge = side_idx in edge_sides
+            viz_data.append({
+                'vertices': placed_pieces[(x, y)][side_idx],
+                'is_edge': is_edge,
+                'incenter': incenter,
+                'piece_id': piece_id,
+                'grid_x': x,
+                'grid_y': y,
+            })
+
+        next_x, next_y = x + direction[0], y + direction[1]
+        if next_x < 0 or next_x >= pw or next_y < 0 or next_y >= ph or placed_pieces.get((next_x, next_y)):
+            direction = directions[(directions.index(direction) + 1) % 4]
+        x, y = x + direction[0], y + direction[1]
+
+    if not viz_data:
+        print("No pieces to draw in SVG")
+        return None
+
+    all_x = []
+    all_y = []
+    for vd in viz_data:
+        for vx, vy in vd['vertices']:
+            all_x.append(vx)
+            all_y.append(vy)
+        all_x.append(vd['incenter'][0])
+        all_y.append(vd['incenter'][1])
+
+    min_x, max_x = min(all_x), max(all_x)
+    min_y, max_y = min(all_y), max(all_y)
+    margin = max(max_x - min_x, max_y - min_y) * 0.05
+    vb_x = min_x - margin
+    vb_y = min_y - margin
+    vb_w = (max_x - min_x) + 2 * margin
+    vb_h = (max_y - min_y) + 2 * margin
+
+    parts = []
+    parts.append('<?xml version="1.0" encoding="UTF-8" standalone="no"?>')
+    parts.append(
+        f'<svg width="{vb_w:.1f}" height="{vb_h:.1f}" '
+        f'viewBox="{vb_x:.1f} {vb_y:.1f} {vb_w:.1f} {vb_h:.1f}" '
+        f'xmlns="http://www.w3.org/2000/svg">'
+    )
+
+    pieces_drawn = set()
+    for i, vd in enumerate(viz_data):
+        color_idx = i % 4
+        color = side_colors[color_idx]
+        pts = ' '.join(f'{vx:.2f},{vy:.2f}' for vx, vy in vd['vertices'])
+        if vd['is_edge']:
+            sw = 2.5
+            dash = ' stroke-dasharray="8,4"'
+        else:
+            sw = 1.0
+            dash = ''
+        parts.append(
+            f'<polyline points="{pts}" '
+            f'style="fill:none; stroke:#{color}; stroke-width:{sw}"'
+            f'{dash}/>'
+        )
+
+        pid = vd['piece_id']
+        if pid not in pieces_drawn:
+            pieces_drawn.add(pid)
+            ic = vd['incenter']
+            font_size = max(8, min(20, (max_x - min_x) / pw * 0.12))
+            parts.append(
+                f'<text x="{ic[0]:.1f}" y="{ic[1]:.1f}" '
+                f'text-anchor="middle" dominant-baseline="central" '
+                f'font-size="{font_size:.1f}" fill="#555" '
+                f'font-family="sans-serif" font-weight="bold">'
+                f'{pid}</text>'
+            )
+
+    parts.append('</svg>')
+
+    output_path = os.path.join(output_dir, 'solution.svg')
+    with open(output_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(parts))
+    print(f"Solution SVG written to {output_path}")
+    return output_path
+
+
 def print_solution_summary(board):
     """Print a summary of the solution to stdout."""
     print(f"\nSolution found!")
