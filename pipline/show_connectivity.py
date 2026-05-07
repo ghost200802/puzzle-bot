@@ -545,104 +545,145 @@ def _render_pair_cell(pid_a, si_a, pid_b, si_b, piece_data, piece_imgs, cell_w, 
     return cell_img
 
 
+_SIDE_NAMES = ['TOP', 'RIGHT', 'BOTTOM', 'LEFT']
+
+
 def _draw_piece_page(pid, fits, piece_data, piece_imgs, piece_edge_info, output_path):
-    sides_data = piece_data[pid]
     ef = piece_edge_info.get(pid, [False] * 4)
     flat_count = sum(1 for f in ef if f)
     ptype = "CORNER" if flat_count >= 2 else ("EDGE" if flat_count >= 1 else "INNER")
 
-    cells = []
+    try:
+        title_font = ImageFont.truetype("arial.ttf", 26)
+        section_font = ImageFont.truetype("arial.ttf", 22)
+        label_font = ImageFont.truetype("arial.ttf", 16)
+        warn_font = ImageFont.truetype("arial.ttf", 20)
+        summary_font = ImageFont.truetype("arial.ttf", 16)
+    except Exception:
+        title_font = ImageFont.load_default()
+        section_font = title_font
+        label_font = title_font
+        warn_font = title_font
+        summary_font = title_font
+
+    max_per_side = 3
+    cell_w = 500
+    cell_h = 500
+    gap = 12
+    header_h = 80
+    section_h = 40
+    label_h = 30
+    warn_h = 80
+
+    sections = []
     for si in range(4):
+        is_edge = ef[si] if si < len(ef) else False
         side_matches = fits[si] if si < len(fits) else []
-        for m in side_matches[:3]:
-            other_pid = m['pid']
-            other_si = m['si']
-            if other_pid not in piece_data:
-                continue
-            err_val = m['error'] / 1000.0
-            ld_val = m.get('len_diff', 0) / 1000.0
-            cells.append((si, other_pid, other_si, err_val, ld_val))
+        cells = []
+        if not is_edge:
+            for m in side_matches[:max_per_side]:
+                other_pid = m['pid']
+                other_si = m['si']
+                if other_pid not in piece_data:
+                    continue
+                err_val = m['error'] / 1000.0
+                ld_val = m.get('len_diff', 0) / 1000.0
+                cells.append((other_pid, other_si, err_val, ld_val))
+        sections.append({
+            'si': si,
+            'is_edge': is_edge,
+            'cells': cells,
+            'total': len(side_matches),
+        })
 
-    cells = cells[:12]
-
-    if not cells:
+    has_any_cells = any(len(s['cells']) > 0 for s in sections)
+    if not has_any_cells:
         return
 
-    n_cells = len(cells) + 1
-    cols = min(4, n_cells)
-    rows = math.ceil(n_cells / cols)
+    max_cols = max_per_side
+    canvas_w = max_cols * (cell_w + gap) + gap
 
-    cell_w = 600
-    cell_h = 600
-    gap = 10
-    header_h = 50
-    label_h = 22
+    total_h = header_h
+    for sec in sections:
+        total_h += section_h
+        if sec['cells']:
+            total_h += cell_h + label_h + gap
+        elif not sec['is_edge']:
+            total_h += warn_h + gap
+        else:
+            total_h += 6
+        total_h += gap
 
-    canvas_w = cols * (cell_w + gap) + gap
-    canvas_h = rows * (cell_h + gap + label_h) + header_h + gap
-
-    canvas = Image.new('RGBA', (canvas_w, canvas_h), (230, 230, 230, 255))
+    canvas = Image.new('RGBA', (canvas_w, total_h), (235, 235, 235, 255))
     draw = ImageDraw.Draw(canvas)
 
-    try:
-        font = ImageFont.truetype("arial.ttf", 14)
-        title_font = ImageFont.truetype("arial.ttf", 18)
-        small_font = ImageFont.truetype("arial.ttf", 11)
-    except Exception:
-        font = ImageFont.load_default()
-        title_font = font
-        small_font = font
-
-    draw.text((gap, 5), f"Piece #{pid} ({ptype})", fill=(0, 0, 0, 255), font=title_font)
+    draw.text((gap, 8), f"Piece #{pid} ({ptype})", fill=(0, 0, 0, 255), font=title_font)
 
     match_summary = []
     for si in range(4):
-        n = len(fits[si]) if si < len(fits) else 0
         is_edge = ef[si] if si < len(ef) else False
-        tag = "EDGE" if is_edge else f"{n}m"
-        match_summary.append(f"S{si}:{tag}")
-    draw.text((gap, 28), "  |  ".join(match_summary), fill=(80, 80, 80, 255), font=font)
+        n = len(fits[si]) if si < len(fits) else 0
+        if is_edge:
+            tag = "EDGE"
+        else:
+            tag = f"{n}m"
+        match_summary.append(f"S{si}({_SIDE_NAMES[si]}): {tag}")
+    draw.text((gap, 45), "   |   ".join(match_summary), fill=(80, 80, 80, 255), font=summary_font)
 
-    col, row = 0, 0
-    x_off = gap + col * (cell_w + gap)
-    y_off = header_h + row * (cell_h + gap + label_h)
+    y_pos = header_h
 
-    center_img = piece_imgs.get(pid)
-    if center_img:
-        scale_c = min((cell_w - 20) / center_img.size[0], (cell_h - 20) / center_img.size[1])
-        cw = int(center_img.size[0] * scale_c)
-        ch = int(center_img.size[1] * scale_c)
-        if cw > 0 and ch > 0:
-            resized_c = center_img.resize((cw, ch), Image.LANCZOS)
-            cx = x_off + (cell_w - cw) // 2
-            cy = y_off + (cell_h - ch) // 2
-            canvas.paste(resized_c, (cx, cy), resized_c)
+    for sec in sections:
+        si = sec['si']
+        is_edge = sec['is_edge']
+        side_name = _SIDE_NAMES[si]
 
-    draw.rectangle([x_off, y_off, x_off + cell_w, y_off + cell_h],
-                   outline=(200, 150, 0, 255), width=2)
-    draw.text((x_off + 2, y_off + cell_h + 2), f"#{pid} (center)", fill=(200, 150, 0, 255), font=small_font)
+        if is_edge:
+            hdr_text = f"Side {si} ({side_name})  [EDGE]"
+            hdr_color = (160, 160, 160, 255)
+            hdr_fill = (210, 210, 210, 255)
+        elif len(sec['cells']) == 0:
+            hdr_text = f"Side {si} ({side_name})  [NO MATCHES]"
+            hdr_color = (200, 0, 0, 255)
+            hdr_fill = (255, 230, 230, 255)
+        else:
+            n_show = len(sec['cells'])
+            n_total = sec['total']
+            more = f" (+{n_total - n_show} more)" if n_total > n_show else ""
+            hdr_text = f"Side {si} ({side_name})  [{n_show}/{n_total} matches]{more}"
+            hdr_color = (0, 80, 0, 255)
+            hdr_fill = (215, 235, 215, 255)
 
-    col += 1
+        draw.rectangle([gap, y_pos, canvas_w - gap, y_pos + section_h - 2],
+                       fill=hdr_fill)
+        draw.text((gap + 10, y_pos + 8), hdr_text, fill=hdr_color, font=section_font)
+        y_pos += section_h
 
-    for si, other_pid, other_si, err_val, ld_val in cells:
-        if col >= cols:
-            col = 0
-            row += 1
-        x_off = gap + col * (cell_w + gap)
-        y_off = header_h + row * (cell_h + gap + label_h)
+        if sec['cells']:
+            for i, (other_pid, other_si, err_val, ld_val) in enumerate(sec['cells']):
+                x_off = gap + i * (cell_w + gap)
 
-        cell = _render_pair_cell(
-            pid, si, other_pid, other_si,
-            piece_data, piece_imgs, cell_w, cell_h
-        )
-        canvas.paste(cell, (x_off, y_off))
+                cell = _render_pair_cell(
+                    pid, si, other_pid, other_si,
+                    piece_data, piece_imgs, cell_w, cell_h
+                )
+                canvas.paste(cell, (x_off, y_pos))
 
-        draw.rectangle([x_off, y_off, x_off + cell_w, y_off + cell_h],
-                       outline=(180, 180, 180, 255), width=1)
-        label = f"#{other_pid}[s{other_si}] e={err_val:.3f} ld={ld_val:.3f}"
-        draw.text((x_off + 2, y_off + cell_h + 2), label, fill=(0, 0, 0, 255), font=small_font)
+                draw.rectangle([x_off, y_pos, x_off + cell_w, y_pos + cell_h],
+                               outline=(180, 180, 180, 255), width=1)
+                label = f"#{other_pid}[s{other_si}]  err={err_val:.3f}  ld={ld_val:.3f}"
+                draw.text((x_off + 6, y_pos + cell_h + 5), label, fill=(0, 0, 0, 255), font=label_font)
 
-        col += 1
+            y_pos += cell_h + label_h + gap
+        elif not is_edge:
+            draw.rectangle([gap, y_pos, canvas_w - gap, y_pos + warn_h],
+                           fill=(255, 240, 240, 255), outline=(255, 80, 80, 255), width=2)
+            warn_text1 = f"WARNING: No matches found for Side {si} ({side_name})"
+            draw.text((gap + 20, y_pos + 12), warn_text1, fill=(200, 0, 0, 255), font=warn_font)
+            warn_text2 = "This side should have at least one match candidate."
+            draw.text((gap + 20, y_pos + 45), warn_text2, fill=(180, 60, 60, 255), font=label_font)
+            y_pos += warn_h + gap
+        else:
+            y_pos += 6
 
     canvas.save(output_path)
 
