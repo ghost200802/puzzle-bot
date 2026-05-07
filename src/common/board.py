@@ -159,6 +159,8 @@ class Board(object):
         return self.placed_count < other.placed_count
 
     def get(self, x, y):
+        if x < 0 or x >= self.width or y < 0 or y >= self.height:
+            return None
         return self._board[y][x]
 
     @property
