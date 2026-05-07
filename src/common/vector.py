@@ -22,7 +22,7 @@ SIDE_PARALLEL_THRESHOLD_DEG = 32
 
 # Adjacent sides must be "orthogonal" within this threshold (in degrees)
 CORNER_MIN_ANGLE_DEG = 15
-CORNER_MAX_ANGLE_DEG = 150
+CORNER_MAX_ANGLE_DEG = 180
 SIDES_ORTHOGONAL_THRESHOLD_DEG = 50
 
 # A side must be at least this long to be considered an edge
@@ -255,7 +255,25 @@ class Candidate(object):
         points_around = util.slice(vertices, i-vec_len_for_curve, i+vec_len_for_curve)
         curve_score = util.curve_score(points=points_around, debug=debug)
 
-        candidate = Candidate(v=v_i, i=i, centroid=centroid, angular_width=angle_hij, offset_from_center=offset_from_center, midangle=midangle, stdev=stdev, curve_score=curve_score, centroid_symmetry=centroid_symmetry)
+        trend_len = round(18 * scalar)
+        trend_skip = round(3 * scalar)
+        pts_backward = util.slice(vertices, i - trend_len - trend_skip, i - trend_skip)
+        pts_forward = util.slice(vertices, i + trend_skip + 1, i + trend_len + trend_skip)
+        line_intersection_dist = 10000
+
+        if len(pts_backward) >= 3 and len(pts_forward) >= 3:
+            angle_back = util.trendline(pts_backward)
+            angle_fwd = util.trendline(pts_forward)
+            angle_diff = util.compare_angles(angle_back, angle_fwd)
+            is_parallel = angle_diff < (20 * math.pi / 180)
+            if not is_parallel:
+                line_back = util.line_from_angle_and_point(angle=angle_back, point=pts_backward[-1], length=500)
+                line_fwd = util.line_from_angle_and_point(angle=angle_fwd, point=pts_forward[0], length=500)
+                intersection_pt = util.intersection(line_back, line_fwd)
+                if intersection_pt is not None:
+                    line_intersection_dist = util.distance(v_i, intersection_pt)
+
+        candidate = Candidate(v=v_i, i=i, centroid=centroid, angular_width=angle_hij, offset_from_center=offset_from_center, midangle=midangle, stdev=stdev, curve_score=curve_score, centroid_symmetry=centroid_symmetry, line_intersection_dist=line_intersection_dist)
         if debug:
             print(f"actually pointed toward center: {offset_from_center < angle_hij / 2}, pointed close enough toward center: {abs(offset_from_center) <= (55 * math.pi/180)}")
             print(f"stdev of spokes: {stdev} = {stdev_h} + {stdev_j}, {vec_len_for_stdev}px out")
@@ -268,7 +286,7 @@ class Candidate(object):
 
         return candidate
 
-    def __init__(self, v, i, centroid, angular_width=10000, offset_from_center=10000, stdev=10000, midangle=10000, curve_score=10000, centroid_symmetry=10000,):
+    def __init__(self, v, i, centroid, angular_width=10000, offset_from_center=10000, stdev=10000, midangle=10000, curve_score=10000, centroid_symmetry=10000, line_intersection_dist=10000):
         self.v = v
         self.i = i
         self.centroid = centroid
@@ -278,15 +296,19 @@ class Candidate(object):
         self.midangle = midangle
         self.curve_score = curve_score
         self.centroid_symmetry = centroid_symmetry
+        self.line_intersection_dist = line_intersection_dist
 
     def score(self):
         angle_error = max(0, self.angle - math.pi/2)
         penalty = 0.0
-        if angle_error > math.pi / 18:
-            penalty += 1.0 * (angle_error - math.pi / 18)
-        if angle_error > math.pi / 6:
-            penalty += 4.0 * (angle_error - math.pi / 6)
-        score = (0.7 * (angle_error + penalty)) + (0.4 * self.offset_from_center) + (5.0 * (self.stdev ** 2)) + (0.8 * self.curve_score)
+        if angle_error > math.pi / 4:
+            penalty += 0.5 * (angle_error - math.pi / 4)
+        if angle_error > math.pi / 3:
+            penalty += 2.0 * (angle_error - math.pi / 3)
+        intersection_penalty = 0.0
+        if self.line_intersection_dist > 15:
+            intersection_penalty = 0.05 * (self.line_intersection_dist - 15)
+        score = (0.5 * (angle_error + penalty)) + (0.4 * self.offset_from_center) + (5.0 * (self.stdev ** 2)) + (0.8 * self.curve_score) + intersection_penalty
         return score
 
     def score_with_bbox(self, bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y):
@@ -606,7 +628,7 @@ class Vector(object):
             except Exception as e:
                 print(f"Error while computing curve score for piece {self.id}: {e}")
 
-            if not candidate or candidate.score() > 3.0:
+            if not candidate or candidate.score() > 5.0:
                 if debug:
                     print(f">>>>>> Skipping; score too high: {candidate.score() if candidate else 0.0}")
                 continue
@@ -662,7 +684,7 @@ class Vector(object):
                 except Exception as e:
                     continue
 
-                if candidate and candidate.score() <= 3.0:
+                if candidate and candidate.score() <= 5.0:
                     edge_candidates.append(candidate)
                     existing_indices.add(i)
 

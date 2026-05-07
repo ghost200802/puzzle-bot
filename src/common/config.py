@@ -57,6 +57,9 @@ PIECE_BMP_DIR = '2_piece_bmps'
 # Step 3 takes in piece BMPs and outputs SVGs and JSON
 VECTOR_DIR = '3_vector'
 
+# Check output directory (for quality inspection after vectorization)
+CHECK_DIR = '__check'
+
 # Step 4 goes through all the vector pieces and deletes duplicates
 DEDUPED_DIR = '4_deduped'
 

@@ -77,6 +77,9 @@ def main():
     print(f"Output: {VECTOR_OUT}/")
     print(f"{'=' * 60}")
 
+    from check_squareness import run_check
+    run_check(OUTPUT_DIR)
+
 
 if __name__ == '__main__':
     main()
