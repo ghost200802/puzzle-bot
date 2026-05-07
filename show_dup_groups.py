@@ -4,12 +4,13 @@ from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
-from common.config import VECTOR_DIR
+from common.config import VECTOR_DIR, CHECK_DIR
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'puzzle_new')
 VECTOR_PATH = os.path.join(OUTPUT_DIR, VECTOR_DIR)
+CHECK_PATH = os.path.join(OUTPUT_DIR, CHECK_DIR)
 COLOR_DIR = os.path.join(OUTPUT_DIR, '2_piece_colors')
-META_PATH = os.path.join(OUTPUT_DIR, 'dedup_match_meta.json')
+META_PATH = os.path.join(CHECK_PATH, 'dedup_match_meta.json')
 
 import run_dedup as dedup
 
@@ -119,7 +120,7 @@ def main():
 
         meta_lines = []
         for pa, pb, m in pair_metas:
-            stage_label = f"S{m['stage']}"
+            stage_label = f"S{m['stage']}" if 'stage' in m else ""
             meta_lines.append(
                 f"#{pa}~#{pb}: RMSE={m['total_rmse']:.4f}(<{m['rmse_thresh']}) "
                 f"NCC={m['ncc']:.3f}(>={m['ncc_thresh']}) rot={m['rot']} [{stage_label}]"
@@ -172,7 +173,7 @@ def main():
         final.paste(row, (0, y))
         y += row.height + GAP
 
-    out_path = os.path.join(OUTPUT_DIR, 'dup_groups_visual.png')
+    out_path = os.path.join(CHECK_PATH, 'dup_groups_visual.png')
     final.save(out_path)
     print(f"\nSaved visualization to {out_path}")
     print(f"Image size: {final.width}x{final.height}")

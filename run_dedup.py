@@ -7,25 +7,22 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
-from common.config import VECTOR_DIR, DEDUPED_DIR
+from common.config import VECTOR_DIR, DEDUPED_DIR, CHECK_DIR
 
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'puzzle_new')
 VECTOR_PATH = os.path.join(OUTPUT_DIR, VECTOR_DIR)
 DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
+CHECK_PATH = os.path.join(OUTPUT_DIR, CHECK_DIR)
 BMP_DIR = os.path.join(OUTPUT_DIR, '2_piece_bmps')
 COLOR_DIR = os.path.join(OUTPUT_DIR, '2_piece_colors')
 
 PROFILE_N = 50
 
-STAGE1_SIDE_RMSE = 0.025
-STAGE1_LENGTH_RATIO = 0.85
-STAGE1_NCC_MIN = 0.70
+SIDE_RMSE = 0.08
+LENGTH_RATIO = 0.65
+NCC_MIN = 0.65
 
-STAGE2_SIDE_RMSE = 0.08
-STAGE2_LENGTH_RATIO = 0.65
-STAGE2_NCC_MIN = 0.70
-
-META_PATH = os.path.join(OUTPUT_DIR, 'dedup_match_meta.json')
+META_PATH = os.path.join(CHECK_PATH, 'dedup_match_meta.json')
 NUM_WORKERS = min(max(1, multiprocessing.cpu_count() - 2), 14)
 
 
@@ -191,6 +188,13 @@ def match_two_pieces(sides_a, sides_b, rmse_thresh, ratio_min):
     return best_rot >= 0, best_rot, best_error, n_matching
 
 
+def _geo_match_task(args):
+    pa, pb, sides_a_serializable, sides_b_serializable, rmse_thresh, ratio_min = args
+    is_match, rot, err, n_match = match_two_pieces(
+        sides_a_serializable, sides_b_serializable, rmse_thresh, ratio_min)
+    return pa, pb, is_match, rot, err, n_match
+
+
 def _compute_ncc_task(args):
     pid_a, pid_b, rot = args
     path_a = os.path.join(COLOR_DIR, f'piece_{pid_a}.png')
@@ -232,15 +236,28 @@ def _compute_ncc_task(args):
 
     ga = gray_a[overlap].astype(np.float64)
     gb = gray_b[overlap].astype(np.float64)
+
+    src_hist, _ = np.histogram(gb.astype(np.uint8), bins=256, range=(0, 256))
+    ref_hist, _ = np.histogram(ga.astype(np.uint8), bins=256, range=(0, 256))
+    src_cdf = np.cumsum(src_hist).astype(np.float64)
+    ref_cdf = np.cumsum(ref_hist).astype(np.float64)
+    src_cdf /= src_cdf[-1] if src_cdf[-1] > 0 else 1
+    ref_cdf /= ref_cdf[-1] if ref_cdf[-1] > 0 else 1
+    mapping = np.zeros(256, dtype=np.uint8)
+    for i in range(256):
+        mapping[i] = int(np.argmin(np.abs(ref_cdf - src_cdf[i])))
+    gb_matched = mapping[gb.astype(np.uint8)].astype(np.float64)
+
     ga_norm = ga - ga.mean()
-    gb_norm = gb - gb.mean()
+    gb_norm = gb_matched - gb_matched.mean()
     denom = np.sqrt(np.sum(ga_norm ** 2) * np.sum(gb_norm ** 2))
     if denom < 1e-6:
         return pid_a, pid_b, rot, -1.0
     ncc_gray = np.sum(ga_norm * gb_norm) / denom
 
     edges_a = cv2.Canny(gray_a, 50, 150)
-    edges_b = cv2.Canny(gray_b, 50, 150)
+    gray_b_matched_full = mapping[gray_b]
+    edges_b = cv2.Canny(gray_b_matched_full, 50, 150)
     ea = edges_a[overlap].astype(np.float64)
     eb = edges_b[overlap].astype(np.float64)
     ea_norm = ea - ea.mean()
@@ -259,9 +276,11 @@ def main():
     if os.path.exists(DEDUPED_PATH):
         shutil.rmtree(DEDUPED_PATH)
     os.makedirs(DEDUPED_PATH, exist_ok=True)
+    os.makedirs(CHECK_PATH, exist_ok=True)
 
     print("=" * 60)
-    print("Deduplication Pipeline (Geometric + Texture NCC)")
+    print("Deduplication Pipeline (Geometric + HistMatch NCC)")
+    print(f"RMSE<={SIDE_RMSE}  ratio>={LENGTH_RATIO}  NCC>={NCC_MIN}")
     print(f"Workers: {NUM_WORKERS}")
     print("=" * 60)
 
@@ -297,93 +316,68 @@ def main():
 
     all_pairs_meta = {}
 
-    # ---- Stage 1: strict geometric ----
-    print(f"\n--- Stage 1: strict geometric (RMSE<={STAGE1_SIDE_RMSE}, ratio>={STAGE1_LENGTH_RATIO}) ---")
-    stage1_geo = []
+    # ---- Geometric matching (multiprocess) ----
+    print(f"\n--- Geometric matching (RMSE<={SIDE_RMSE}, ratio>={LENGTH_RATIO}) ---")
+    geo_tasks = []
     for sig, pids in sig_groups.items():
         if len(pids) < 2:
             continue
         for i, j in itertools.combinations(range(len(pids)), 2):
             pa, pb = pids[i], pids[j]
-            is_match, rot, err, n_match = match_two_pieces(
-                pieces[pa], pieces[pb], STAGE1_SIDE_RMSE, STAGE1_LENGTH_RATIO)
-            if is_match:
-                stage1_geo.append((pa, pb, err, n_match, rot))
+            geo_tasks.append((pa, pb, pieces[pa], pieces[pb], SIDE_RMSE, LENGTH_RATIO))
 
-    print(f"  Geometric matches: {len(stage1_geo)}")
-    print(f"  Computing NCC (multiprocess)...")
-    s1_tasks = [(pa, pb, rot) for pa, pb, err, n_match, rot in stage1_geo]
-    s1_results = {}
+    print(f"  Total pairs to check: {len(geo_tasks)}")
+    print(f"  Running geometric matching (multiprocess)...")
+
+    geo_matches = []
+    n_done = 0
+    batch_size = max(1, len(geo_tasks) // 20)
     with ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
-        futures = {executor.submit(_compute_ncc_task, t): (t[0], t[1]) for t in s1_tasks}
+        futures = {executor.submit(_geo_match_task, t): (t[0], t[1]) for t in geo_tasks}
+        for future in as_completed(futures):
+            pa, pb, is_match, rot, err, n_match = future.result()
+            n_done += 1
+            if n_done % batch_size == 0:
+                print(f"    Progress: {n_done}/{len(geo_tasks)} ({len(geo_matches)} matches so far)")
+            if is_match:
+                geo_matches.append((pa, pb, err, n_match, rot))
+
+    print(f"  Geometric matches: {len(geo_matches)}")
+
+    # ---- NCC texture verification (multiprocess) ----
+    print(f"  Computing NCC with histogram matching (multiprocess)...")
+    ncc_tasks = [(pa, pb, rot) for pa, pb, err, n_match, rot in geo_matches]
+    ncc_results = {}
+    n_ncc_done = 0
+    ncc_batch = max(1, len(ncc_tasks) // 10)
+    with ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
+        futures = {executor.submit(_compute_ncc_task, t): (t[0], t[1]) for t in ncc_tasks}
         for future in as_completed(futures):
             pid_a, pid_b, rot, ncc = future.result()
-            s1_results[(min(pid_a, pid_b), max(pid_a, pid_b))] = (rot, ncc)
+            ncc_results[(min(pid_a, pid_b), max(pid_a, pid_b))] = (rot, ncc)
+            n_ncc_done += 1
+            if n_ncc_done % ncc_batch == 0:
+                print(f"    NCC progress: {n_ncc_done}/{len(ncc_tasks)}")
 
-    s1_confirmed = 0
-    s1_rejected = 0
-    for pa, pb, err, n_match, rot in stage1_geo:
+    confirmed_count = 0
+    rejected_count = 0
+    for pa, pb, err, n_match, rot in geo_matches:
         key = (min(pa, pb), max(pa, pb))
-        _, ncc = s1_results.get(key, (rot, 0.0))
-        confirmed = ncc >= STAGE1_NCC_MIN
+        _, ncc = ncc_results.get(key, (rot, 0.0))
+        confirmed = ncc >= NCC_MIN
         meta = {
-            'stage': 1, 'rmse_thresh': STAGE1_SIDE_RMSE, 'length_ratio_thresh': STAGE1_LENGTH_RATIO,
-            'ncc_thresh': STAGE1_NCC_MIN, 'rot': rot, 'total_rmse': round(err, 4),
+            'rmse_thresh': SIDE_RMSE, 'length_ratio_thresh': LENGTH_RATIO,
+            'ncc_thresh': NCC_MIN, 'rot': rot, 'total_rmse': round(err, 4),
             'n_matching_sides': n_match, 'ncc': ncc, 'confirmed': confirmed,
         }
         all_pairs_meta[key] = meta
         if confirmed:
             union(pa, pb)
-            s1_confirmed += 1
+            confirmed_count += 1
         else:
-            s1_rejected += 1
-    print(f"  Confirmed: {s1_confirmed}, rejected by texture: {s1_rejected}")
+            rejected_count += 1
 
-    # ---- Stage 2: relaxed geometric ----
-    print(f"\n--- Stage 2: relaxed geometric (RMSE<={STAGE2_SIDE_RMSE}, ratio>={STAGE2_LENGTH_RATIO}) ---")
-    stage2_geo = []
-    for sig, pids in sig_groups.items():
-        if len(pids) < 2:
-            continue
-        for i, j in itertools.combinations(range(len(pids)), 2):
-            pa, pb = pids[i], pids[j]
-            key = (min(pa, pb), max(pa, pb))
-            if key in all_pairs_meta:
-                continue
-            is_match, rot, err, n_match = match_two_pieces(
-                pieces[pa], pieces[pb], STAGE2_SIDE_RMSE, STAGE2_LENGTH_RATIO)
-            if is_match:
-                stage2_geo.append((pa, pb, err, n_match, rot))
-
-    print(f"  Geometric matches: {len(stage2_geo)}")
-    if stage2_geo:
-        print(f"  Computing NCC (multiprocess)...")
-        s2_tasks = [(pa, pb, rot) for pa, pb, err, n_match, rot in stage2_geo]
-        s2_results = {}
-        with ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
-            futures = {executor.submit(_compute_ncc_task, t): (t[0], t[1]) for t in s2_tasks}
-            for future in as_completed(futures):
-                pid_a, pid_b, rot, ncc = future.result()
-                s2_results[(min(pid_a, pid_b), max(pid_a, pid_b))] = (rot, ncc)
-
-        s2_confirmed = 0
-        s2_rejected = 0
-        for pa, pb, err, n_match, rot in stage2_geo:
-            key = (min(pa, pb), max(pa, pb))
-            _, ncc = s2_results.get(key, (rot, 0.0))
-            confirmed = ncc >= STAGE2_NCC_MIN
-            meta = {
-                'stage': 2, 'rmse_thresh': STAGE2_SIDE_RMSE, 'length_ratio_thresh': STAGE2_LENGTH_RATIO,
-                'ncc_thresh': STAGE2_NCC_MIN, 'rot': rot, 'total_rmse': round(err, 4),
-                'n_matching_sides': n_match, 'ncc': ncc, 'confirmed': confirmed,
-            }
-            all_pairs_meta[key] = meta
-            if confirmed:
-                union(pa, pb)
-                s2_confirmed += 1
-            else:
-                s2_rejected += 1
-        print(f"  Confirmed: {s2_confirmed}, rejected: {s2_rejected}")
+    print(f"  Confirmed: {confirmed_count}, rejected by texture: {rejected_count}")
 
     groups = {}
     for pid in pieces:
