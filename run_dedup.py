@@ -29,6 +29,19 @@ META_PATH = os.path.join(OUTPUT_DIR, 'dedup_match_meta.json')
 NUM_WORKERS = min(max(1, multiprocessing.cpu_count() - 2), 14)
 
 
+def compute_contrast(pid):
+    path = os.path.join(COLOR_DIR, f'piece_{pid}.png')
+    if not os.path.exists(path):
+        return 0.0
+    img = np.array(Image.open(path).convert('RGBA'))
+    mask = img[:, :, 3] > 128
+    if np.sum(mask) < 100:
+        return 0.0
+    gray = cv2.cvtColor(img[:, :, :3], cv2.COLOR_RGB2GRAY)
+    vals = gray[mask].astype(np.float64)
+    return float(np.std(vals))
+
+
 def load_pieces(vector_path):
     pieces = {}
     vp = Path(vector_path)
@@ -378,9 +391,14 @@ def main():
         groups.setdefault(root, []).append(pid)
 
     uniques = set()
+    contrast_cache = {}
+    for pid in pieces:
+        contrast_cache[pid] = compute_contrast(pid)
     for root, members in groups.items():
-        best = max(members, key=lambda pid: sum(len(pieces[pid][i]['vertices']) for i in range(4)))
+        best = max(members, key=lambda pid: contrast_cache[pid])
         uniques.add(best)
+        if len(members) > 1:
+            print(f"  Group {sorted(members)} -> best=#{best} (contrast={contrast_cache[best]:.1f})")
 
     print(f"\n{'=' * 60}")
     print(f"RESULT: {len(uniques)} unique pieces (from {len(pieces)} total)")
@@ -423,6 +441,12 @@ def main():
     print(f"{'='*60}")
     from show_dup_groups import main as show_dup_main
     show_dup_main()
+
+    print(f"\n{'='*60}")
+    print("Generating signature groups visualization...")
+    print(f"{'='*60}")
+    from show_sig_groups import main as show_sig_main
+    show_sig_main()
 
     return len(uniques)
 
