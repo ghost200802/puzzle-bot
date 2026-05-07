@@ -3,6 +3,8 @@ import numpy as np
 from pathlib import Path
 from PIL import Image
 import cv2
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
 from common.config import VECTOR_DIR, DEDUPED_DIR
@@ -11,13 +13,20 @@ OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 
 VECTOR_PATH = os.path.join(OUTPUT_DIR, VECTOR_DIR)
 DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
 BMP_DIR = os.path.join(OUTPUT_DIR, '2_piece_bmps')
-INPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'input', 'puzzles')
+COLOR_DIR = os.path.join(OUTPUT_DIR, '2_piece_colors')
 
 PROFILE_N = 50
-SIDE_RMSE_THRESHOLD = 0.025
-SIDE_LENGTH_RATIO_MIN = 0.85
-COLOR_HIST_BINS = 32
-COLOR_CORR_THRESHOLD = 0.85
+
+STAGE1_SIDE_RMSE = 0.025
+STAGE1_LENGTH_RATIO = 0.85
+STAGE1_NCC_MIN = 0.70
+
+STAGE2_SIDE_RMSE = 0.08
+STAGE2_LENGTH_RATIO = 0.65
+STAGE2_NCC_MIN = 0.70
+
+META_PATH = os.path.join(OUTPUT_DIR, 'dedup_match_meta.json')
+NUM_WORKERS = min(max(1, multiprocessing.cpu_count() - 2), 14)
 
 
 def load_pieces(vector_path):
@@ -129,11 +138,10 @@ def normalize_types(types):
 def compare_side_profiles(prof_a, prof_b):
     if len(prof_a) != len(prof_b):
         return 999.0
-    rmse = np.sqrt(np.mean((prof_a - prof_b) ** 2))
-    return rmse
+    return np.sqrt(np.mean((prof_a - prof_b) ** 2))
 
 
-def match_two_pieces(sides_a, sides_b, threshold=SIDE_RMSE_THRESHOLD):
+def match_two_pieces(sides_a, sides_b, rmse_thresh, ratio_min):
     best_error = float('inf')
     best_rot = -1
     n_matching = 0
@@ -149,13 +157,13 @@ def match_two_pieces(sides_a, sides_b, threshold=SIDE_RMSE_THRESHOLD):
             len_b = get_side_length(rot_b[i])
             if len_a > 0 and len_b > 0:
                 ratio = min(len_a, len_b) / max(len_a, len_b)
-                if ratio < SIDE_LENGTH_RATIO_MIN:
+                if ratio < ratio_min:
                     ok = False
                     break
             prof_a = get_side_profile(sides_a[i])
             prof_b = get_side_profile(rot_b[i])
             err = compare_side_profiles(prof_a, prof_b)
-            if err > threshold:
+            if err > rmse_thresh:
                 ok = False
                 break
             total_err += err
@@ -170,57 +178,68 @@ def match_two_pieces(sides_a, sides_b, threshold=SIDE_RMSE_THRESHOLD):
     return best_rot >= 0, best_rot, best_error, n_matching
 
 
-def extract_piece_color_histogram(pid, source_info):
-    if source_info is None:
-        return None
-    src_file = source_info.get('source_file')
-    bbox = source_info.get('bbox')
-    if not src_file or not bbox:
-        return None
-    img_path = os.path.join(INPUT_DIR, src_file)
-    if not os.path.exists(img_path):
-        return None
-    img = Image.open(img_path)
-    rgba = np.array(img)
-    if rgba.shape[2] != 4:
-        return None
-    alpha = rgba[:, :, 3]
-    x0, y0, x1, y1 = bbox
-    pad = 5
-    x0p, y0p = max(0, x0 - pad), max(0, y0 - pad)
-    x1p, y1p = min(alpha.shape[1], x1 + pad), min(alpha.shape[0], y1 + pad)
-    alpha_crop = alpha[y0p:y1p, x0p:x1p]
-    rgb_crop = rgba[y0p:y1p, x0p:x1p, :3]
-    mask = alpha_crop > 128
-    pixels = rgb_crop[mask]
-    if len(pixels) < 100:
-        return None
-    pixels_bgr = pixels[:, ::-1].copy()
-    hsv = cv2.cvtColor(pixels_bgr.reshape(1, -1, 3), cv2.COLOR_BGR2HSV).reshape(-1, 3)
-    h_hist = np.histogram(hsv[:, 0], bins=COLOR_HIST_BINS, range=(0, 180))[0].astype(float)
-    s_hist = np.histogram(hsv[:, 1], bins=COLOR_HIST_BINS, range=(0, 256))[0].astype(float)
-    v_hist = np.histogram(hsv[:, 2], bins=COLOR_HIST_BINS, range=(0, 256))[0].astype(float)
-    h_hist /= (h_hist.sum() + 1e-8)
-    s_hist /= (s_hist.sum() + 1e-8)
-    v_hist /= (v_hist.sum() + 1e-8)
-    return np.concatenate([h_hist, s_hist, v_hist])
+def _compute_ncc_task(args):
+    pid_a, pid_b, rot = args
+    path_a = os.path.join(COLOR_DIR, f'piece_{pid_a}.png')
+    path_b = os.path.join(COLOR_DIR, f'piece_{pid_b}.png')
+    if not os.path.exists(path_a) or not os.path.exists(path_b):
+        return pid_a, pid_b, rot, -1.0
 
+    img_a = np.array(Image.open(path_a).convert('RGBA'))
+    img_b = np.array(Image.open(path_b).convert('RGBA'))
 
-def color_histogram_correlation(hist_a, hist_b):
-    if hist_a is None or hist_b is None:
-        return 0.0
-    corr_h = np.corrcoef(hist_a[:COLOR_HIST_BINS], hist_b[:COLOR_HIST_BINS])[0, 1]
-    corr_s = np.corrcoef(hist_a[COLOR_HIST_BINS:2*COLOR_HIST_BINS], hist_b[COLOR_HIST_BINS:2*COLOR_HIST_BINS])[0, 1]
-    corr_v = np.corrcoef(hist_a[2*COLOR_HIST_BINS:], hist_b[2*COLOR_HIST_BINS:])[0, 1]
-    return (corr_h + corr_s + corr_v) / 3.0
+    vp = Path(VECTOR_PATH)
+    corners_a = []
+    corners_b = []
+    for j in range(4):
+        with open(vp / f'side_{pid_a}_{j}.json') as f:
+            corners_a.append(np.array(json.load(f)['vertices'][0], dtype=np.float64))
+        with open(vp / f'side_{pid_b}_{j}.json') as f:
+            corners_b.append(np.array(json.load(f)['vertices'][0], dtype=np.float64))
 
+    src_pts = np.array([corners_b[(i + rot) % 4] for i in range(4)], dtype=np.float32)
+    dst_pts = np.array(corners_a, dtype=np.float32)
 
-def load_source_info():
-    info_path = os.path.join(OUTPUT_DIR, 'piece_source_info.json')
-    if os.path.exists(info_path):
-        with open(info_path) as f:
-            return json.load(f)
-    return {}
+    H, _ = cv2.findHomography(src_pts, dst_pts)
+    if H is None:
+        return pid_a, pid_b, rot, -1.0
+
+    h, w = img_a.shape[:2]
+    warped_b = cv2.warpPerspective(img_b, H, (w, h))
+
+    mask_a = img_a[:, :, 3] > 128
+    mask_b = warped_b[:, :, 3] > 128
+    overlap = mask_a & mask_b
+
+    if np.sum(overlap) < 500:
+        return pid_a, pid_b, rot, -1.0
+
+    gray_a = cv2.cvtColor(img_a[:, :, :3], cv2.COLOR_RGB2GRAY)
+    gray_b = cv2.cvtColor(warped_b[:, :, :3], cv2.COLOR_RGB2GRAY)
+
+    ga = gray_a[overlap].astype(np.float64)
+    gb = gray_b[overlap].astype(np.float64)
+    ga_norm = ga - ga.mean()
+    gb_norm = gb - gb.mean()
+    denom = np.sqrt(np.sum(ga_norm ** 2) * np.sum(gb_norm ** 2))
+    if denom < 1e-6:
+        return pid_a, pid_b, rot, -1.0
+    ncc_gray = np.sum(ga_norm * gb_norm) / denom
+
+    edges_a = cv2.Canny(gray_a, 50, 150)
+    edges_b = cv2.Canny(gray_b, 50, 150)
+    ea = edges_a[overlap].astype(np.float64)
+    eb = edges_b[overlap].astype(np.float64)
+    ea_norm = ea - ea.mean()
+    eb_norm = eb - eb.mean()
+    denom_e = np.sqrt(np.sum(ea_norm ** 2) * np.sum(eb_norm ** 2))
+    if denom_e < 1e-6:
+        ncc_edge = 0.0
+    else:
+        ncc_edge = np.sum(ea_norm * eb_norm) / denom_e
+
+    ncc = max(ncc_gray, ncc_edge)
+    return pid_a, pid_b, rot, round(ncc, 4)
 
 
 def main():
@@ -229,7 +248,8 @@ def main():
     os.makedirs(DEDUPED_PATH, exist_ok=True)
 
     print("=" * 60)
-    print("Deduplication Pipeline (Geometric + Color)")
+    print("Deduplication Pipeline (Geometric + Texture NCC)")
+    print(f"Workers: {NUM_WORKERS}")
     print("=" * 60)
 
     pieces = load_pieces(VECTOR_PATH)
@@ -262,40 +282,95 @@ def main():
         if ra != rb:
             parent[rb] = ra
 
-    dup_pairs = []
+    all_pairs_meta = {}
+
+    # ---- Stage 1: strict geometric ----
+    print(f"\n--- Stage 1: strict geometric (RMSE<={STAGE1_SIDE_RMSE}, ratio>={STAGE1_LENGTH_RATIO}) ---")
+    stage1_geo = []
     for sig, pids in sig_groups.items():
         if len(pids) < 2:
             continue
         for i, j in itertools.combinations(range(len(pids)), 2):
             pa, pb = pids[i], pids[j]
-            is_match, rot, err, n_match = match_two_pieces(pieces[pa], pieces[pb])
+            is_match, rot, err, n_match = match_two_pieces(
+                pieces[pa], pieces[pb], STAGE1_SIDE_RMSE, STAGE1_LENGTH_RATIO)
             if is_match:
-                dup_pairs.append((pa, pb, err, n_match, rot))
+                stage1_geo.append((pa, pb, err, n_match, rot))
+
+    print(f"  Geometric matches: {len(stage1_geo)}")
+    print(f"  Computing NCC (multiprocess)...")
+    s1_tasks = [(pa, pb, rot) for pa, pb, err, n_match, rot in stage1_geo]
+    s1_results = {}
+    with ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
+        futures = {executor.submit(_compute_ncc_task, t): (t[0], t[1]) for t in s1_tasks}
+        for future in as_completed(futures):
+            pid_a, pid_b, rot, ncc = future.result()
+            s1_results[(min(pid_a, pid_b), max(pid_a, pid_b))] = (rot, ncc)
+
+    s1_confirmed = 0
+    s1_rejected = 0
+    for pa, pb, err, n_match, rot in stage1_geo:
+        key = (min(pa, pb), max(pa, pb))
+        _, ncc = s1_results.get(key, (rot, 0.0))
+        confirmed = ncc >= STAGE1_NCC_MIN
+        meta = {
+            'stage': 1, 'rmse_thresh': STAGE1_SIDE_RMSE, 'length_ratio_thresh': STAGE1_LENGTH_RATIO,
+            'ncc_thresh': STAGE1_NCC_MIN, 'rot': rot, 'total_rmse': round(err, 4),
+            'n_matching_sides': n_match, 'ncc': ncc, 'confirmed': confirmed,
+        }
+        all_pairs_meta[key] = meta
+        if confirmed:
+            union(pa, pb)
+            s1_confirmed += 1
+        else:
+            s1_rejected += 1
+    print(f"  Confirmed: {s1_confirmed}, rejected by texture: {s1_rejected}")
+
+    # ---- Stage 2: relaxed geometric ----
+    print(f"\n--- Stage 2: relaxed geometric (RMSE<={STAGE2_SIDE_RMSE}, ratio>={STAGE2_LENGTH_RATIO}) ---")
+    stage2_geo = []
+    for sig, pids in sig_groups.items():
+        if len(pids) < 2:
+            continue
+        for i, j in itertools.combinations(range(len(pids)), 2):
+            pa, pb = pids[i], pids[j]
+            key = (min(pa, pb), max(pa, pb))
+            if key in all_pairs_meta:
+                continue
+            is_match, rot, err, n_match = match_two_pieces(
+                pieces[pa], pieces[pb], STAGE2_SIDE_RMSE, STAGE2_LENGTH_RATIO)
+            if is_match:
+                stage2_geo.append((pa, pb, err, n_match, rot))
+
+    print(f"  Geometric matches: {len(stage2_geo)}")
+    if stage2_geo:
+        print(f"  Computing NCC (multiprocess)...")
+        s2_tasks = [(pa, pb, rot) for pa, pb, err, n_match, rot in stage2_geo]
+        s2_results = {}
+        with ProcessPoolExecutor(max_workers=NUM_WORKERS) as executor:
+            futures = {executor.submit(_compute_ncc_task, t): (t[0], t[1]) for t in s2_tasks}
+            for future in as_completed(futures):
+                pid_a, pid_b, rot, ncc = future.result()
+                s2_results[(min(pid_a, pid_b), max(pid_a, pid_b))] = (rot, ncc)
+
+        s2_confirmed = 0
+        s2_rejected = 0
+        for pa, pb, err, n_match, rot in stage2_geo:
+            key = (min(pa, pb), max(pa, pb))
+            _, ncc = s2_results.get(key, (rot, 0.0))
+            confirmed = ncc >= STAGE2_NCC_MIN
+            meta = {
+                'stage': 2, 'rmse_thresh': STAGE2_SIDE_RMSE, 'length_ratio_thresh': STAGE2_LENGTH_RATIO,
+                'ncc_thresh': STAGE2_NCC_MIN, 'rot': rot, 'total_rmse': round(err, 4),
+                'n_matching_sides': n_match, 'ncc': ncc, 'confirmed': confirmed,
+            }
+            all_pairs_meta[key] = meta
+            if confirmed:
                 union(pa, pb)
-
-    print(f"\nGeometric duplicate pairs: {len(dup_pairs)}")
-
-    source_info = load_source_info()
-    color_hists = {}
-    if source_info:
-        print(f"\nExtracting color features for {len(source_info)} pieces...")
-        for pid_str, info in source_info.items():
-            pid = int(pid_str)
-            if pid in pieces:
-                color_hists[pid] = extract_piece_color_histogram(pid, info)
-        print(f"  Extracted {sum(1 for v in color_hists.values() if v is not None)} color histograms")
-
-    color_verified = 0
-    color_rejected = 0
-    if color_hists:
-        for pa, pb, err, n_match, rot in dup_pairs:
-            ha, hb = color_hists.get(pa), color_hists.get(pb)
-            if ha is not None and hb is not None:
-                corr = color_histogram_correlation(ha, hb)
-                if corr >= COLOR_CORR_THRESHOLD:
-                    color_verified += 1
-                else:
-                    color_rejected += 1
+                s2_confirmed += 1
+            else:
+                s2_rejected += 1
+        print(f"  Confirmed: {s2_confirmed}, rejected: {s2_rejected}")
 
     groups = {}
     for pid in pieces:
@@ -310,8 +385,6 @@ def main():
     print(f"\n{'=' * 60}")
     print(f"RESULT: {len(uniques)} unique pieces (from {len(pieces)} total)")
     print(f"Duplicates removed: {len(pieces) - len(uniques)}")
-    if color_verified:
-        print(f"Color verification: {color_verified} confirmed, {color_rejected} rejected")
     print(f"{'=' * 60}")
 
     dup_groups = {root: members for root, members in groups.items() if len(members) > 1}
@@ -333,7 +406,24 @@ def main():
             shutil.copyfile(os.path.join(VECTOR_PATH, svg),
                             os.path.join(DEDUPED_PATH, svg))
 
+    meta_serializable = {}
+    for k, v in all_pairs_meta.items():
+        meta_serializable[f"{k[0]}_{k[1]}"] = {
+            key: (bool(val) if isinstance(val, (np.bool_,)) else val)
+            for key, val in v.items()
+        }
+    with open(META_PATH, 'w') as f:
+        json.dump(meta_serializable, f, indent=2)
+
     print(f"\nSaved to {DEDUPED_PATH}/")
+    print(f"Match metadata saved to {META_PATH}")
+
+    print(f"\n{'='*60}")
+    print("Generating duplicate groups visualization...")
+    print(f"{'='*60}")
+    from show_dup_groups import main as show_dup_main
+    show_dup_main()
+
     return len(uniques)
 
 

@@ -71,6 +71,10 @@ def segment_image(image_path, target_size=PHONE_TARGET_PIECE_SIZE):
     """
     img = Image.open(image_path)
     rgba = np.array(img)
+    if rgba.ndim == 2:
+        rgba = np.stack([rgba, rgba, rgba, np.full_like(rgba, 255)], axis=-1)
+    elif rgba.shape[2] == 3:
+        rgba = np.concatenate([rgba, np.full((*rgba.shape[:2], 1), 255, dtype=np.uint8)], axis=-1)
 
     if rgba.shape[2] == 4:
         alpha = rgba[:, :, 3]
@@ -183,13 +187,19 @@ def segment_image(image_path, target_size=PHONE_TARGET_PIECE_SIZE):
         # Keep only the largest connected component
         smooth_binary = _keep_largest_component(smooth_binary)
 
-        # Fill internal holes
         from scipy.ndimage import binary_fill_holes
         smooth_binary = binary_fill_holes(smooth_binary).astype(np.uint8)
+
+        rgba_crop = rgba[py0:py1, px0:px1]
+        color_scaled = cv2.resize(rgba_crop, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        mask_3c = np.stack([smooth_binary] * 4, axis=-1)
+        color_masked = (color_scaled * mask_3c).astype(np.uint8)
+        color_masked[:, :, 3] = smooth_binary * 255
 
         pieces.append({
             'id': len(pieces) + 1,
             'binary': smooth_binary,
+            'color_rgba': color_masked,
             'origin': (int(px0), int(py0)),
             'centroid': ((px0 + px1) / 2.0, (py0 + py1) / 2.0),
             'area': int(np.sum(smooth_binary)),
@@ -211,15 +221,18 @@ def main():
     ])
 
     bmp_dir = os.path.join(OUTPUT_DIR, BMP_DIR_NAME)
+    color_dir = os.path.join(OUTPUT_DIR, '2_piece_colors')
     os.makedirs(bmp_dir, exist_ok=True)
+    os.makedirs(color_dir, exist_ok=True)
 
     all_pieces = []
     global_id = 1
 
     print("=" * 60)
-    print("Segmentation Pipeline (BMP only)")
+    print("Segmentation Pipeline (BMP + Color PNG)")
     print(f"Input: {INPUT_DIR}")
     print(f"BMP output: {bmp_dir}")
+    print(f"Color output: {color_dir}")
     print("=" * 60)
 
     for img_file in image_files:
@@ -238,6 +251,8 @@ def main():
         pid = p['id']
         bmp_path = os.path.join(bmp_dir, f'piece_{pid}.bmp')
         save_island_as_bmp(p['binary'], bmp_path)
+        color_path = os.path.join(color_dir, f'piece_{pid}.png')
+        Image.fromarray(p['color_rgba'], mode='RGBA').save(color_path)
 
     # Analysis
     print(f"\n{'='*60}")
@@ -298,6 +313,7 @@ def main():
         print(f"  Saved grid overview: {grid_path}")
 
     print(f"\n  BMPs saved to {bmp_dir}/")
+    print(f"  Color PNGs saved to {color_dir}/")
 
 
 if __name__ == '__main__':
