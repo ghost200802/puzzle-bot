@@ -63,6 +63,7 @@ def _can_potentially_match(piece_a, si, piece_b, sj):
     if sd_a != 0 and sd_b != 0 and sd_a * sd_b < 0:
         return False
 
+    rot_for_b = side_a.original_angle + math.pi - side_b.original_angle
     adj_map = {
         (si - 1) % 4: (sj + 1) % 4,
         (si + 1) % 4: (sj - 1) % 4,
@@ -71,16 +72,16 @@ def _can_potentially_match(piece_a, si, piece_b, sj):
         adj_a = piece_a.sides[adj_a_si]
         adj_b = piece_b.sides[adj_b_si]
 
+        if adj_a.is_edge != adj_b.is_edge:
+            return False
+
         if adj_a.is_edge and adj_b.is_edge:
+            adj_b_rotated = adj_b.original_angle + rot_for_b
             angle_diff = util.compare_angles(
-                adj_a.original_angle, adj_b.original_angle
+                adj_a.original_angle, adj_b_rotated
             )
             if angle_diff > sides.EDGE_PARALLEL_THRESHOLD_RAD:
                 return False
-        elif adj_a.is_edge and not adj_b.is_edge:
-            return False
-        elif not adj_a.is_edge and adj_b.is_edge:
-            return False
 
     return True
 
