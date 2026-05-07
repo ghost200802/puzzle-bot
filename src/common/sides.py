@@ -4,15 +4,14 @@ import numpy as np
 
 from common import util
 
+0
+SIDE_MAX_ERROR_TO_MATCH = 1.5
 
-# Two sides from different pieces "fit" if they are within this threshold (0.0 = perfect)
-SIDE_MAX_ERROR_TO_MATCH = 3.5  # 1.80
+SIDE_MAX_LENGTH_DISCREPANCY = 0.05
 
-# sides must be within this multiple of each other's polyline length
-SIDE_MAX_LENGTH_DISCREPANCY = 0.08
-
-# when we resample a side, we use this many vertices
 SIDE_RESAMPLE_VERTEX_COUNT = 26
+
+EDGE_PARALLEL_THRESHOLD_RAD = math.radians(10)
 
 
 class Side(object):
@@ -24,14 +23,19 @@ class Side(object):
         self.vertices = vertices
         self.p1 = vertices[0]
         self.p2 = vertices[-1]
+        self.original_p1 = vertices[0]
+        self.original_p2 = vertices[-1]
+        self.original_angle = util.angle_between(self.original_p1, self.original_p2)
+        self.original_length = util.distance(self.original_p1, self.original_p2)
+        self.is_convex = self._compute_convexity(vertices)
         self.photo_filename = photo_filename
 
         if resample:
             vertices, self.v_length = util.resample_polyline(vertices, n=SIDE_RESAMPLE_VERTEX_COUNT)
             if rotate:
                 angle = self.angle
-                self.vertices = Side.rotated(vertices=vertices, from_angle=angle, desired_angle=0)  # aligned to be horizontal
-                self.vertices_flipped = Side.rotated(vertices=vertices, from_angle=angle, desired_angle=math.pi)[::-1] # aligned to be horizontal but rotated and mirrored to be the negative space of the side
+                self.vertices = Side.rotated(vertices=vertices, from_angle=angle, desired_angle=0)
+                self.vertices_flipped = Side.rotated(vertices=vertices, from_angle=angle, desired_angle=math.pi)[::-1]
             else:
                 self.vertices = np.array(vertices)
             self.p1 = self.vertices[0]
@@ -55,29 +59,56 @@ class Side(object):
     def length(self) -> float:
         return util.distance(self.p1, self.p2)
 
-    def error_when_fit_with(self, side, flip=True, render=False, skip_edges = True, debug_str=None) -> bool:
-        """
-        Returns None if no match, or a float representing the similarity of the two sides (1.0 = perfect) if they generally match
-        """
-        # if render and debug_str:
-        #     print(debug_str)
+    @staticmethod
+    def _signed_distance_to_line(point, line_p1, line_p2):
+        dx = line_p2[0] - line_p1[0]
+        dy = line_p2[1] - line_p1[1]
+        cross = dx * (point[1] - line_p1[1]) - dy * (point[0] - line_p1[0])
+        length = math.sqrt(dx * dx + dy * dy)
+        if length < 0.001:
+            return 0
+        return cross / length
 
+    def _compute_convexity(self, vertices):
+        if self.is_edge:
+            return None
+        if self.piece_center is None:
+            return None
+
+        center_sd = Side._signed_distance_to_line(
+            self.piece_center, self.original_p1, self.original_p2
+        )
+        if abs(center_sd) < 0.001:
+            return None
+
+        p1 = tuple(self.original_p1)
+        p2 = tuple(self.original_p2)
+        total_sd = 0
+        for v in vertices:
+            total_sd += Side._signed_distance_to_line(tuple(v), p1, p2)
+        avg_sd = total_sd / len(vertices)
+
+        return (avg_sd * center_sd) > 0
+
+    def center_side_sign(self):
+        if self.piece_center is None:
+            return 0
+        return Side._signed_distance_to_line(
+            self.piece_center, self.original_p1, self.original_p2
+        )
+
+    def error_when_fit_with(self, side, flip=True, render=False, skip_edges=True, debug_str=None):
         if skip_edges and (self.is_edge or side.is_edge):
-            # if render:
-            #     print("\tNO MATCH: one is an edge!!!!!!!!!!")
             return 1000
 
-        # sides must be roughly the same length
         d_scale = 1.0 - (self.length / side.length)
         if abs(d_scale) > SIDE_MAX_LENGTH_DISCREPANCY:
-            # if render:
-            #     print(f"\tNO MATCH: scale is too different!!!!!!!!!! {d_scale}")
             return 1000
 
         polyline1 = self.vertices
-        if flip:  # plugging one piece into another means we need them to be inverse shapes
+        if flip:
             polyline2 = side.vertices_flipped
-        else:  # comparing two sides to see if they belong to the same piece
+        else:
             polyline2 = side.vertices
 
         error, shift = util.error_between_polylines(polyline1, polyline2, p1_len=side.v_length)
@@ -92,12 +123,8 @@ class Side(object):
 
     @staticmethod
     def rotated(vertices, from_angle, desired_angle) -> List[Tuple[int, int]]:
-        """
-        Returns a list of vertices that have been geometrically rotated such that the side is at the desired angle, with p1 as the origin
-        """
         o = vertices[0]
 
-        # translate to origin
         translated = []
         for i, (x, y) in enumerate(vertices):
             translated.append((x - o[0], y - o[1]))
@@ -105,7 +132,6 @@ class Side(object):
         angle_diff = desired_angle - from_angle
         rotated = []
 
-        # rotate around the origin
         for v in translated:
             rotated.append(util.rotate(v, around=translated[0], angle=angle_diff))
 

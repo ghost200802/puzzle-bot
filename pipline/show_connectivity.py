@@ -84,10 +84,9 @@ def _transform_piece(src_sides, src_side_idx, target_side_verts):
     tgt_mid = _side_midpoint(target_side_verts)
     tgt_theta = _side_angle(target_side_verts)
 
-    cos_b = math.cos(-src_theta)
-    sin_b = math.sin(-src_theta)
-    cos_a = math.cos(tgt_theta)
-    sin_a = math.sin(tgt_theta)
+    rot_angle = tgt_theta + math.pi - src_theta
+    cos_r = math.cos(rot_angle)
+    sin_r = math.sin(rot_angle)
 
     transformed = []
     for side in src_sides:
@@ -96,13 +95,8 @@ def _transform_piece(src_sides, src_side_idx, target_side_verts):
             dx = v[0] - src_mid[0]
             dy = v[1] - src_mid[1]
 
-            rx = dx * cos_b - dy * sin_b
-            ry = dx * sin_b + dy * cos_b
-
-            ry = -ry
-
-            fx = rx * cos_a - ry * sin_a
-            fy = rx * sin_a + ry * cos_a
+            fx = dx * cos_r - dy * sin_r
+            fy = dx * sin_r + dy * cos_r
 
             new_verts.append((fx + tgt_mid[0], fy + tgt_mid[1]))
 

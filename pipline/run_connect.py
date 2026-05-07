@@ -33,7 +33,7 @@ def build_piece_edge_info(deduped_path):
 
 def main():
     print("=" * 60)
-    print("Connectivity Building Pipeline")
+    print("Connectivity Building Pipeline (v2)")
     print(f"Input:  {DEDUPED_PATH}")
     print(f"Output: {CONNECTIVITY_PATH}")
     print("=" * 60)
@@ -91,9 +91,13 @@ def main():
         json.dump(summary, f, indent=2)
     print(f"Saved connectivity_summary.json")
 
+    total_matches = sum(s['total_matches'] for s in summary.values())
+    pieces_with_matches = sum(1 for s in summary.values() if s['total_matches'] > 0)
     print(f"\n{'=' * 60}")
     print(f"Connectivity building complete!")
     print(f"  Pieces processed: {len(connectivity)}")
+    print(f"  Pieces with matches: {pieces_with_matches}")
+    print(f"  Total match entries: {total_matches}")
     print(f"  Output: {CONNECTIVITY_PATH}/")
     print(f"{'=' * 60}")
 
