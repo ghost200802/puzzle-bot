@@ -31,8 +31,19 @@ class Piece(object):
     def to_dict(self) -> dict:
         fits = [[], [], [], []]
         for i in range(4):
-            for (other_piece_id, other_side_index, error) in self.fits[i]:
-                fits[i].append([other_piece_id, other_side_index, round(error * 1000)])
+            for m in self.fits[i]:
+                ca = m['convex_a']
+                cb = m['convex_b']
+                fits[i].append({
+                    'pid': m['pid'],
+                    'si': m['si'],
+                    'error': round(m['error'] * 1000),
+                    'len_diff': round(m['len_diff'] * 1000),
+                    'shift_x': round(m['shift_x'], 2),
+                    'shift_y': round(m['shift_y'], 2),
+                    'convex_a': bool(ca) if ca is not None else None,
+                    'convex_b': bool(cb) if cb is not None else None,
+                })
 
         return fits
 

@@ -7,7 +7,7 @@ from common import util
 0
 SIDE_MAX_ERROR_TO_MATCH = 1.5
 
-SIDE_MAX_LENGTH_DISCREPANCY = 0.05
+SIDE_MAX_LENGTH_DISCREPANCY = 0.08
 
 SIDE_RESAMPLE_VERTEX_COUNT = 26
 
@@ -99,11 +99,7 @@ class Side(object):
 
     def error_when_fit_with(self, side, flip=True, render=False, skip_edges=True, debug_str=None):
         if skip_edges and (self.is_edge or side.is_edge):
-            return 1000
-
-        d_scale = 1.0 - (self.length / side.length)
-        if abs(d_scale) > SIDE_MAX_LENGTH_DISCREPANCY:
-            return 1000
+            return 1000, (0, 0)
 
         polyline1 = self.vertices
         if flip:
@@ -119,7 +115,7 @@ class Side(object):
             print(f"\t ==> Error = {error}, shift: {shift}")
             util.render_polylines([shifted0, polyline2])
 
-        return error
+        return error, shift
 
     @staticmethod
     def rotated(vertices, from_angle, desired_angle) -> List[Tuple[int, int]]:

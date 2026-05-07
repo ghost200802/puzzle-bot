@@ -110,18 +110,31 @@ def _find_potential_matches_for_piece(ps_raw, ps_resampled, piece_id):
                     continue
 
                 other_side_res = ps_resampled[other_pid].sides[sj]
-                error = side_res.error_when_fit_with(
+                error, shift = side_res.error_when_fit_with(
                     other_side_res,
                     flip=True,
                     skip_edges=False,
                 )
 
-                if error <= sides.SIDE_MAX_ERROR_TO_MATCH:
-                    fits[si].append((other_pid, sj, error))
+                if error > sides.SIDE_MAX_ERROR_TO_MATCH:
+                    continue
 
-        fits[si] = sorted(fits[si], key=lambda x: x[2])
+                len_diff = abs(1.0 - (side_raw.original_length / other_side_raw.original_length))
+
+                fits[si].append({
+                    'pid': other_pid,
+                    'si': sj,
+                    'error': error,
+                    'len_diff': len_diff,
+                    'shift_x': float(shift[0]),
+                    'shift_y': float(shift[1]),
+                    'convex_a': side_raw.is_convex,
+                    'convex_b': other_side_raw.is_convex,
+                })
+
+        fits[si] = sorted(fits[si], key=lambda x: x['error'])
         if fits[si]:
-            print(f"Piece {piece_id}[{si}] has {len(fits[si])} matches, best: {fits[si][0][2]:.4f}")
+            print(f"Piece {piece_id}[{si}] has {len(fits[si])} matches, best: {fits[si][0]['error']:.4f}")
         else:
             if not piece_raw.sides[si].is_edge:
                 print(f"Warning: Piece {piece_id}[{si}] has no matches (not an edge)")

@@ -76,7 +76,7 @@ def main():
         best_errors = []
         for f in fits_list:
             if f:
-                best_errors.append(min(match[2] for match in f))
+                best_errors.append(min(m['error'] for m in f))
         summary[pid] = {
             'total_matches': total_matches,
             'sides_with_matches': sides_with_matches,
