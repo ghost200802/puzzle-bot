@@ -4,7 +4,6 @@ import numpy as np
 
 from common import util
 
-0
 SIDE_MAX_ERROR_TO_MATCH = 1.5
 
 SIDE_MAX_LENGTH_DISCREPANCY = 0.08
@@ -12,6 +11,8 @@ SIDE_MAX_LENGTH_DISCREPANCY = 0.08
 SIDE_RESAMPLE_VERTEX_COUNT = 26
 
 EDGE_PARALLEL_THRESHOLD_RAD = math.radians(10)
+
+CONVEXITY_TRENDLINE_FRACTION = 0.20
 
 
 class Side(object):
@@ -75,20 +76,35 @@ class Side(object):
         if self.piece_center is None:
             return None
 
-        center_sd = Side._signed_distance_to_line(
-            self.piece_center, self.original_p1, self.original_p2
-        )
-        if abs(center_sd) < 0.001:
+        n = len(vertices)
+        if n < 10:
             return None
 
         p1 = tuple(self.original_p1)
         p2 = tuple(self.original_p2)
-        total_sd = 0
-        for v in vertices:
-            total_sd += Side._signed_distance_to_line(tuple(v), p1, p2)
-        avg_sd = total_sd / len(vertices)
 
-        return (avg_sd * center_sd) > 0
+        center_sd = Side._signed_distance_to_line(self.piece_center, p1, p2)
+        if abs(center_sd) < 0.001:
+            return None
+
+        trend_len = max(5, int(n * CONVEXITY_TRENDLINE_FRACTION))
+        middle_start = trend_len
+        middle_end = n - trend_len
+
+        if middle_end <= middle_start:
+            return None
+
+        middle_vertices = vertices[middle_start:middle_end]
+
+        total_sd = 0
+        for v in middle_vertices:
+            total_sd += Side._signed_distance_to_line(tuple(v), p1, p2)
+        avg_middle_sd = total_sd / len(middle_vertices)
+
+        if abs(avg_middle_sd) < 0.5:
+            return None
+
+        return (avg_middle_sd * center_sd) < 0
 
     def center_side_sign(self):
         if self.piece_center is None:

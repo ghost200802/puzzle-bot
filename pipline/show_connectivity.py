@@ -414,16 +414,19 @@ def _draw_piece_pages(connectivity, piece_data, piece_imgs, piece_edge_info, out
     pages_dir = os.path.join(output_dir, 'pieces')
     os.makedirs(pages_dir, exist_ok=True)
 
+    total_pieces = len(connectivity)
     total_drawn = 0
     for pid_str, fits in sorted(connectivity.items(), key=lambda x: int(x[0])):
         pid = int(pid_str)
         if pid not in piece_data:
             continue
+        total_drawn += 1
+        if total_drawn % 10 == 1 or total_drawn == total_pieces:
+            print(f"  Generating piece pages... {total_drawn}/{total_pieces}")
         _draw_piece_page(
             pid, fits, piece_data, piece_imgs, piece_edge_info,
             os.path.join(pages_dir, f'piece_{pid}.png')
         )
-        total_drawn += 1
 
     print(f"  Generated {total_drawn} piece pages in {pages_dir}")
 
