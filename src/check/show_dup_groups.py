@@ -3,10 +3,12 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_here, '..'))
+sys.path.insert(0, os.path.join(_here, '..', '..', 'pipline'))
 from common.config import VECTOR_DIR, CHECK_DIR
 
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'puzzle_new')
+OUTPUT_DIR = os.path.join(_here, '..', '..', 'output', 'puzzle_new')
 VECTOR_PATH = os.path.join(OUTPUT_DIR, VECTOR_DIR)
 CHECK_PATH = os.path.join(OUTPUT_DIR, CHECK_DIR)
 COLOR_DIR = os.path.join(OUTPUT_DIR, '2_piece_colors')

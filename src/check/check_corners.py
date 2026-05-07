@@ -2,7 +2,8 @@ import os
 import re
 import math
 
-svg_dir = r'f:\work_Puzzle_github\puzzle-bot\output\puzzle_new\3_vector'
+_here = os.path.dirname(os.path.abspath(__file__))
+svg_dir = os.path.join(_here, '..', '..', 'output', 'puzzle_new', '3_vector')
 
 def parse_svg_points(svg_path):
     with open(svg_path, 'r', encoding='utf-8') as f:

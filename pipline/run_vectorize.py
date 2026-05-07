@@ -3,11 +3,13 @@ from PIL import Image
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_here, '..', 'src'))
+sys.path.insert(0, os.path.join(_here, '..', 'src', 'check'))
 from common.config import VECTOR_DIR
 from common import vector
 
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'puzzle_new')
+OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
 BMP_DIR = os.path.join(OUTPUT_DIR, '2_piece_bmps')
 VECTOR_OUT = os.path.join(OUTPUT_DIR, VECTOR_DIR)
 NUM_WORKERS = min(max(1, multiprocessing.cpu_count() - 2), 14)

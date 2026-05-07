@@ -1,7 +1,8 @@
-import json
+import os, json
 import numpy as np
 
-with open('output/puzzle_new/dedup_match_meta.json') as f:
+_here = os.path.dirname(os.path.abspath(__file__))
+with open(os.path.join(_here, '..', '..', 'output', 'puzzle_new', '__check', 'dedup_match_meta.json')) as f:
     meta = json.load(f)
 
 confirmed_ncc = []

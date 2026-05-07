@@ -1,7 +1,8 @@
-import os, numpy as np
+import os, sys, numpy as np
 from PIL import Image
 
-bmp_dir = r'f:\work_Puzzle_github\puzzle-bot\output\puzzle_new\3_vector'
+_here = os.path.dirname(os.path.abspath(__file__))
+bmp_dir = os.path.join(_here, '..', '..', 'output', 'puzzle_new', '3_vector')
 files = sorted([f for f in os.listdir(bmp_dir) if f.endswith('.bmp')])
 print(f'Total BMPs: {len(files)}')
 
@@ -20,9 +21,7 @@ if os.path.exists(p6):
 
 # Check how vectorizer loads BMPs
 print('\n--- vectorizer load test ---')
-sys_path = r'f:\work_Puzzle_github\puzzle-bot\src'
-import sys
-sys.path.insert(0, sys_path)
+sys.path.insert(0, os.path.join(_here, '..'))
 from common.find_islands import load_binary_bitmap
 for f in files[:3]:
     path = os.path.join(bmp_dir, f)

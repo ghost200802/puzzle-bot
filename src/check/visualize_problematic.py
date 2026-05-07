@@ -6,9 +6,10 @@ from PIL import Image, ImageDraw, ImageFont
 from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPM
 
-base_dir = r'f:\work_Puzzle_github\puzzle-bot\output\puzzle_new'
+_here = os.path.dirname(os.path.abspath(__file__))
+base_dir = os.path.join(_here, '..', '..', 'output', 'puzzle_new')
 svg_dir = os.path.join(base_dir, '3_vector')
-output_path = r'f:\work_Puzzle_github\puzzle-bot\problematic_pieces_grid.png'
+output_path = os.path.join(_here, '..', '..', 'problematic_pieces_grid.png')
 
 THRESHOLD = 0.90
 

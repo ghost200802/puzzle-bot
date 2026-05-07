@@ -1,11 +1,10 @@
-import os, json, math, re
+import os, sys, json, math, re
 from PIL import Image, ImageDraw, ImageFont
 from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPM
 
-sys_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src')
-import sys
-sys.path.insert(0, sys_path)
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_here, '..'))
 from common.config import VECTOR_DIR, CHECK_DIR
 
 CHECK_THRESHOLD = 0.80

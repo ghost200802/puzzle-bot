@@ -23,10 +23,11 @@ import pathlib
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-OUTPUT_DIR = os.path.join(os.path.dirname(__file__), 'output')
-EXAMPLE_DATA = os.path.join(os.path.dirname(__file__), '..', 'example_data')
+OUTPUT_DIR = os.path.join(_here, '..', 'output')
+EXAMPLE_DATA = os.path.join(_here, '..', '..', 'example_data')
 
 
 def run_connectivity_and_solve():

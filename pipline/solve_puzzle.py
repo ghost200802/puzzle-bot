@@ -17,10 +17,11 @@ import pathlib
 import numpy as np
 import cv2
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-INPUT_IMAGE = 'input/puzzles/1.png'
-OUTPUT_DIR = 'output/puzzle_1'
+INPUT_IMAGE = os.path.join(_here, '..', 'input', 'puzzles', '1.png')
+OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_1')
 
 
 def segment_pieces_from_alpha(image_path):

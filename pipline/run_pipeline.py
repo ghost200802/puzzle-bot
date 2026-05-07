@@ -19,7 +19,8 @@ import cv2
 from PIL import Image
 from scipy.ndimage import label as ndlabel
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
 from common.config import (
     VECTOR_DIR, DEDUPED_DIR, CONNECTIVITY_DIR, SOLUTION_DIR,
@@ -28,8 +29,8 @@ from common.config import (
 from common.find_islands import save_island_as_bmp
 from common import vector, dedupe
 
-INPUT_IMAGE = 'input/puzzles/1.png'
-OUTPUT_DIR = 'output/puzzle_run'
+INPUT_IMAGE = os.path.join(_here, '..', 'input', 'puzzles', '1.png')
+OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_run')
 TARGET_PIECE_SIZE = 945
 
 

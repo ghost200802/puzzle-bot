@@ -2,12 +2,13 @@ import os, sys, numpy as np, cv2
 from PIL import Image
 from scipy.ndimage import label as ndlabel
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src'))
+_here = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_here, '..'))
 from common.config import PIECE_BMP_DIR, PHONE_TARGET_PIECE_SIZE
 from common.find_islands import save_island_as_bmp
 
-INPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'input', 'puzzles')
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'output', 'puzzle_new')
+INPUT_DIR = os.path.join(_here, '..', '..', 'input', 'puzzles')
+OUTPUT_DIR = os.path.join(_here, '..', '..', 'output', 'puzzle_new')
 BMP_DIR_NAME = PIECE_BMP_DIR
 
 SIZE_RATIO_LOW = 0.35
