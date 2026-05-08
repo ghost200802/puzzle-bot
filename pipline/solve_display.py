@@ -251,11 +251,15 @@ def generate_assembly_png(solution, deduped_dir, output_dir, output_path):
     draw = ImageDraw.Draw(canvas)
 
     try:
-        font = ImageFont.truetype("arial.ttf", max(10, min(24, int(20 * scale))))
+        font = ImageFont.truetype("arialbd.ttf", max(18, min(48, int(36 * scale))))
         title_font = ImageFont.truetype("arial.ttf", max(12, min(28, int(24 * scale))))
     except Exception:
-        font = ImageFont.load_default()
-        title_font = font
+        try:
+            font = ImageFont.truetype("arial.ttf", max(18, min(48, int(36 * scale))))
+            title_font = font
+        except Exception:
+            font = ImageFont.load_default()
+            title_font = font
 
     title = f"Assembly ({solution.placed_count}/{pw * ph} pieces)"
     draw.text((10, 5), title, fill=(0, 0, 0, 255), font=title_font)
@@ -328,7 +332,10 @@ def generate_assembly_png(solution, deduped_dir, output_dir, output_path):
         rv = util.rotate(orig_ic, ic, rotation)
         tv = (rv[0] + translation[0], rv[1] + translation[1])
         cx, cy = to_canvas(tv[0], tv[1])
-        draw.text((cx, cy), str(pid), fill=(0, 0, 0, 255), font=font, anchor="mm")
+        label = str(pid)
+        stroke_w = max(2, int(3 * scale))
+        draw.text((cx, cy), label, fill=(0, 180, 0, 255), font=font, anchor="mm",
+                  stroke_width=stroke_w, stroke_fill=(0, 0, 0, 255))
 
     canvas.save(output_path)
     print(f"PNG saved: {output_path}")

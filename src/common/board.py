@@ -291,7 +291,8 @@ def _get_combined_cost(board, candidate_pid, ps, x, y):
 
 def build_from_corner(ps, start_piece_id, edge_length,
                       puzzle_width=None, puzzle_height=None,
-                      on_milestone=None):
+                      on_milestone=None, ps_fallback=None,
+                      stop_after_border=False):
     pw = puzzle_width or PUZZLE_WIDTH
     ph = puzzle_height or PUZZLE_HEIGHT
     total = pw * ph
@@ -345,36 +346,99 @@ def build_from_corner(ps, start_piece_id, edge_length,
                 print(f"  *** Border complete: {longest} pieces at iter {iteration} ***")
                 if on_milestone:
                     on_milestone(best_board, "border", iteration, time.time() - t_start)
+                if stop_after_border:
+                    print(f"  *** stop_after_border=True, returning border solution ***")
+                    return best_board
 
-            pct = int(longest * 100 / total)
-            threshold = (pct // 20) * 20
-            if threshold > last_milestone_pct and threshold > 0:
-                last_milestone_pct = threshold
-                print(f"  *** Milestone {threshold}%: {longest}/{total} at iter {iteration} ***")
-                if on_milestone:
-                    on_milestone(best_board, f"pct{threshold}", iteration, time.time() - t_start)
+            if border_done:
+                pct = int(longest * 100 / total)
+                threshold = (pct // 5) * 5
+                if threshold > last_milestone_pct and threshold > 0:
+                    last_milestone_pct = threshold
+                    print(f"  *** Milestone {threshold}%: {longest}/{total} at iter {iteration} ***")
+                    if on_milestone:
+                        on_milestone(best_board, f"pct{threshold}", iteration, time.time() - t_start)
 
-        index_of_neighbor_in_direction = (direction - start_orientation) % 4
         iteration += 1
 
-        for neighbor_piece_id, neighbor_side_index, error in ps[start_piece_id][index_of_neighbor_in_direction]:
-            neighbor_orientation = (OPPOSITE[direction] - neighbor_side_index) % 4
-            ok, err = board.can_place(piece_id=neighbor_piece_id, fits=ps[neighbor_piece_id], x=x, y=y, orientation=neighbor_orientation)
-            if ok:
-                combined = _get_combined_cost(board, neighbor_piece_id, ps, x, y)
-                next_board = Board.copy(board)
-                next_board.place(neighbor_piece_id, ps[neighbor_piece_id], x, y, neighbor_orientation)
-                next_direction = direction
+        placed_neighbor_info = []
+        for dx, dy, facing_us in [(-1, 0, RIGHT), (1, 0, LEFT), (0, -1, BOTTOM), (0, 1, TOP)]:
+            nx, ny = x + dx, y + dy
+            nb = board.get(nx, ny)
+            if nb is not None:
+                placed_neighbor_info.append((nb[0], nb[2], facing_us))
+
+        pool = []
+
+        if len(placed_neighbor_info) >= 2:
+            candidate_sets = []
+            for nb_pid, nb_ori, facing_us in placed_neighbor_info:
+                nb_side = (facing_us - nb_ori) % 4
+                pids = {n_pid for n_pid, _, _ in ps[nb_pid][nb_side]}
+                candidate_sets.append(pids)
+
+            common_pids = set.intersection(*candidate_sets) - board._placed_piece_ids
+
+            if not common_pids and ps_fallback is not None:
+                fb_sets = []
+                for nb_pid, nb_ori, facing_us in placed_neighbor_info:
+                    nb_side = (facing_us - nb_ori) % 4
+                    pids = {n_pid for n_pid, _, _ in ps_fallback[nb_pid][nb_side]}
+                    fb_sets.append(pids)
+                fb_common = set.intersection(*fb_sets) - board._placed_piece_ids
+                for pid in fb_common:
+                    nb_pid0, nb_ori0, facing_us0 = placed_neighbor_info[0]
+                    nb_side0 = (facing_us0 - nb_ori0) % 4
+                    orientation = None
+                    for n_pid, n_side, _ in ps_fallback[nb_pid0][nb_side0]:
+                        if n_pid == pid:
+                            orientation = (OPPOSITE[facing_us0] - n_side) % 4
+                            break
+                    if orientation is None:
+                        continue
+                    ok, _ = board.can_place(pid, ps[pid], x, y, orientation)
+                    if ok:
+                        combined = _get_combined_cost(board, pid, ps_fallback, x, y)
+                        pool.append((combined + 50.0, pid, orientation))
+
+            for pid in common_pids:
+                nb_pid0, nb_ori0, facing_us0 = placed_neighbor_info[0]
+                nb_side0 = (facing_us0 - nb_ori0) % 4
+                orientation = None
+                for n_pid, n_side, _ in ps[nb_pid0][nb_side0]:
+                    if n_pid == pid:
+                        orientation = (OPPOSITE[facing_us0] - n_side) % 4
+                        break
+                if orientation is None:
+                    continue
+                ok, _ = board.can_place(pid, ps[pid], x, y, orientation)
+                if ok:
+                    combined = _get_combined_cost(board, pid, ps, x, y)
+                    pool.append((combined, pid, orientation))
+        else:
+            index_of_neighbor_in_direction = (direction - start_orientation) % 4
+            for neighbor_piece_id, neighbor_side_index, _ in ps[start_piece_id][index_of_neighbor_in_direction]:
+                neighbor_orientation = (OPPOSITE[direction] - neighbor_side_index) % 4
+                ok, _ = board.can_place(piece_id=neighbor_piece_id, fits=ps[neighbor_piece_id], x=x, y=y, orientation=neighbor_orientation)
+                if ok:
+                    combined = _get_combined_cost(board, neighbor_piece_id, ps, x, y)
+                    pool.append((combined, neighbor_piece_id, neighbor_orientation))
+
+        pool.sort()
+        for combined, pid, ori in pool:
+            next_board = Board.copy(board)
+            next_board.place(pid, ps[pid], x, y, ori)
+            next_direction = direction
+            next_x = x + (1 if next_direction == RIGHT else -1 if next_direction == LEFT else 0)
+            next_y = y + (1 if next_direction == BOTTOM else -1 if next_direction == TOP else 0)
+
+            if not next_board.is_available(next_x, next_y):
+                next_direction = (direction + 1) % 4
                 next_x = x + (1 if next_direction == RIGHT else -1 if next_direction == LEFT else 0)
                 next_y = y + (1 if next_direction == BOTTOM else -1 if next_direction == TOP else 0)
 
-                if not next_board.is_available(next_x, next_y):
-                    next_direction = (direction + 1) % 4
-                    next_x = x + (1 if next_direction == RIGHT else -1 if next_direction == LEFT else 0)
-                    next_y = y + (1 if next_direction == BOTTOM else -1 if next_direction == TOP else 0)
-
-                data = [next_board, neighbor_piece_id, neighbor_orientation, next_x, next_y, next_direction]
-                heapq.heappush(priority_q, (combined, data))
+            data = [next_board, pid, ori, next_x, next_y, next_direction]
+            heapq.heappush(priority_q, (combined, data))
 
     if board.placed_count == total:
         print(f"Found solution after {iteration} iterations!")

@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import math
+import shutil
 from collections import Counter
 
 _here = os.path.dirname(os.path.abspath(__file__))
@@ -236,9 +237,13 @@ def main():
         reverse=True
     )
 
+    ms_root = os.path.join(SOLUTION_PATH, 'milestone')
+    if os.path.exists(ms_root):
+        shutil.rmtree(ms_root)
+    os.makedirs(ms_root, exist_ok=True)
+
     def on_milestone(b, tag, it, elapsed):
-        tag_name = f"milestone_{tag}"
-        ms_dir = os.path.join(SOLUTION_PATH, tag_name)
+        ms_dir = os.path.join(ms_root, tag)
         os.makedirs(ms_dir, exist_ok=True)
         print(f"    -> saving milestone '{tag}' to {ms_dir}")
         try:
@@ -265,7 +270,9 @@ def main():
             edge_length=edge_length,
             puzzle_width=pw if (pw := w) else None,
             puzzle_height=h,
-            on_milestone=on_milestone
+            on_milestone=on_milestone,
+            ps_fallback=ps_raw,
+            stop_after_border=True
         )
         if solution.placed_count > best_count:
             best_solution = solution
