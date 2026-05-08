@@ -15,7 +15,7 @@ sys.path.insert(0, _here)
 
 from common.config import DEDUPED_DIR
 from common.board import Board
-from common import output as board_output
+from common import output as board_output, util
 from solve_display import generate_assembly_png, compute_piece_transforms
 from run_matchtarget import (
     load_solution, _build_board_from_placed, _resize_to_max,
@@ -31,8 +31,6 @@ SEARCH_MARGIN = 40
 COARSE_STEP = 4
 ROTATION_RANGE = 5.0
 ROTATION_STEP = 0.5
-
-ORI_TO_ANGLE = {0: 0, 1: 90, 2: 180, 3: 270}
 
 
 def _load_connectivity(connectivity_file):
@@ -89,71 +87,6 @@ def _load_piece_images(color_dir, pids):
             alphas[pid] = np.full(img.shape[:2], 255, dtype=np.uint8)
     return images, alphas
 
-
-def _prepare_piece_at_cell(pid, ori, cell_x, cell_y, cell_w, cell_h,
-                           piece_img, piece_alpha, target_h, target_w):
-    angle_deg = ORI_TO_ANGLE.get(ori, 0)
-
-    h_img, w_img = piece_img.shape[:2]
-    ic = (w_img / 2.0, h_img / 2.0)
-
-    cos_r = math.cos(math.radians(angle_deg))
-    sin_r = math.sin(math.radians(angle_deg))
-    corners = [(0, 0), (w_img, 0), (w_img, h_img), (0, h_img)]
-    img_pts = []
-    for cx, cy in corners:
-        dx = cx - ic[0]
-        dy = cy - ic[1]
-        ox = dx * cos_r - dy * sin_r + ic[0]
-        oy = dx * sin_r + dy * cos_r + ic[1]
-        img_pts.append((ox, oy))
-
-    img_min_x = min(p[0] for p in img_pts)
-    img_min_y = min(p[1] for p in img_pts)
-    img_max_x = max(p[0] for p in img_pts)
-    img_max_y = max(p[1] for p in img_pts)
-
-    out_w = int(math.ceil(img_max_x - img_min_x)) + 2
-    out_h = int(math.ceil(img_max_y - img_min_y)) + 2
-
-    scale_x = cell_w / out_w if out_w > 0 else 1.0
-    scale_y = cell_h / out_h if out_h > 0 else 1.0
-    scale = min(scale_x, scale_y)
-
-    new_w = max(1, int(out_w * scale))
-    new_h = max(1, int(out_h * scale))
-
-    cos_neg = math.cos(math.radians(-angle_deg))
-    sin_neg = math.sin(math.radians(-angle_deg))
-    sm_x = (img_min_x - ic[0]) * scale
-    sm_y = (img_min_y - ic[1]) * scale
-
-    a = cos_neg * scale
-    b = -sin_neg * scale
-    c = cos_neg * sm_x - sin_neg * sm_y + ic[0]
-    d = sin_neg * scale
-    e = cos_neg * scale
-    f = sin_neg * sm_x + cos_neg * sm_y + ic[1]
-
-    M_pil = np.array([[a, b, c], [d, e, f], [0, 0, 1]], dtype=np.float64)
-    M_aff = np.linalg.inv(M_pil)[:2, :]
-
-    piece_rot = cv2.warpAffine(piece_img, M_aff, (new_w, new_h),
-                                flags=cv2.INTER_AREA,
-                                borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
-    alpha_rot = cv2.warpAffine(piece_alpha, M_aff, (new_w, new_h),
-                                flags=cv2.INTER_AREA,
-                                borderMode=cv2.BORDER_CONSTANT, borderValue=0)
-
-    erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ERODE_PX * 2 + 1, ERODE_PX * 2 + 1))
-    mask_eroded = cv2.erode((alpha_rot > 128).astype(np.uint8), erode_kernel) > 0
-    mask_raw = alpha_rot > 128
-    piece_gray = cv2.cvtColor(piece_rot, cv2.COLOR_BGR2GRAY)
-
-    paste_x = cell_x + (cell_w - new_w) / 2.0
-    paste_y = cell_y + (cell_h - new_h) / 2.0
-
-    return piece_gray, mask_eroded, mask_raw, piece_rot, (paste_x, paste_y), (new_w, new_h)
 
 
 def _ncc_search(piece_gray, mask_eroded, paste_pos, size, target_aligned):
@@ -333,19 +266,22 @@ class TargetedSolver:
         self.ps_raw = _load_ps_raw(self.deduped_dir, all_pids)
         self.piece_images, self.piece_alphas = _load_piece_images(self.color_dir, all_pids)
 
-        matcher = TargetMatcher(
-            target_image_path=target_image_path,
-            pw=self.pw, ph=self.ph,
-            placed=self.placed,
-            output_dir=os.path.dirname(solution_dir),
-            output_root=output_root,
-        )
-        matcher.rectify_target()
-        self.target_aligned = matcher.target_aligned
-        self._grid_ox = matcher._grid_offset_x
-        self._grid_oy = matcher._grid_offset_y
-        self._cell_w = matcher._cell_w
-        self._cell_h = matcher._cell_h
+        target_aligned_path = os.path.join(os.path.dirname(solution_dir), 'target_aligned.png')
+        if target_image_path and os.path.exists(target_image_path):
+            matcher = TargetMatcher(
+                target_image_path=target_image_path,
+                pw=self.pw, ph=self.ph,
+                placed=self.placed,
+                output_dir=os.path.dirname(solution_dir),
+                output_root=output_root,
+            )
+            matcher.rectify_target()
+            self.target_aligned = matcher.target_aligned
+        elif os.path.exists(target_aligned_path):
+            self.target_aligned = cv2.imread(target_aligned_path)
+            print(f"  Loaded target_aligned from {target_aligned_path}")
+        else:
+            raise FileNotFoundError(f"Need either target image or target_aligned.png")
 
         self.board = Board(self.pw, self.ph)
         self.fixed_pids = set()
@@ -404,60 +340,171 @@ class TargetedSolver:
         return empty
 
     def _get_candidates(self, gx, gy):
-        constraints = []
+        constraint_sets = []
         for d, (dx, dy) in enumerate([(0, -1), (1, 0), (0, 1), (-1, 0)]):
             cell = self.board.get(gx + dx, gy + dy)
             if cell is None:
                 continue
             adj_pid, _, adj_ori = cell
-            s_adj = (d - adj_ori) % 4
+            back_d = (d + 2) % 4
+            s_adj = (back_d - adj_ori) % 4
             if adj_pid not in self.connectivity:
                 continue
-            back_d = (d + 2) % 4
-            constraint = []
+            s = set()
             for match_pid, match_si, error in self.connectivity[adj_pid][s_adj]:
-                required_ori = (back_d - match_si) % 4
-                constraint.append((match_pid, required_ori, error))
-            constraints.append(constraint)
+                required_ori = (d - match_si) % 4
+                s.add((match_pid, required_ori))
+            constraint_sets.append(s)
 
-        if not constraints:
+        if not constraint_sets:
             return []
 
-        if len(constraints) == 1:
-            return list(set((pid, ori) for pid, ori, _ in constraints[0]))
+        result = constraint_sets[0]
+        for s in constraint_sets[1:]:
+            result = result & s
+        return list(result)
 
-        pid_oris = {}
-        for constraint in constraints:
-            for pid, ori, _ in constraint:
-                pid_oris.setdefault(pid, set()).add(ori)
-        return [(pid, oris.pop()) for pid, oris in pid_oris.items() if len(oris) == 1]
+    def _compute_transform(self, pid, ori, gx, gy):
+        cand_sides = self.ps_raw.get(pid)
+        if not cand_sides or cand_sides[0] is None:
+            return None
+        cand_ic = tuple(cand_sides[0]['incenter'])
+        new_sides = util.rotate_list([0, 1, 2, 3], -ori)
+
+        rotations = []
+        translation_samples = []
+        for d, (ddx, ddy) in enumerate([(0, -1), (1, 0), (0, 1), (-1, 0)]):
+            cell_n = self.board.get(gx + ddx, gy + ddy)
+            if cell_n is None:
+                continue
+            adj_pid, _, adj_ori = cell_n
+            back_d = (d + 2) % 4
+            s_adj = (back_d - adj_ori) % 4
+
+            if adj_pid not in self._orig_transforms:
+                continue
+            rot_n, trans_n, ic_n = self._orig_transforms[adj_pid]
+
+            adj_side = self.ps_raw.get(adj_pid, [None]*4)[s_adj]
+            if adj_side is None:
+                continue
+            adj_verts = adj_side['vertices']
+            adj_rotated = [util.rotate(v, ic_n, rot_n) for v in adj_verts]
+            adj_translated = [(r[0] + trans_n[0], r[1] + trans_n[1]) for r in adj_rotated]
+
+            adj_angle = math.atan2(
+                adj_translated[-1][1] - adj_translated[0][1],
+                adj_translated[-1][0] - adj_translated[0][0]
+            ) % (2 * math.pi)
+
+            cand_phys_side = new_sides[d]
+            cand_side = cand_sides[cand_phys_side]
+            if cand_side is None:
+                continue
+            cand_verts = cand_side['vertices']
+            cand_angle = math.atan2(
+                cand_verts[-1][1] - cand_verts[0][1],
+                cand_verts[-1][0] - cand_verts[0][0]
+            ) % (2 * math.pi)
+
+            rot = adj_angle - cand_angle - math.pi
+            rotations.append(rot)
+
+            cand_rotated = [util.rotate(v, cand_ic, rot) for v in cand_verts]
+            sample = util.subtract(adj_translated[-1], cand_rotated[0])
+            translation_samples.append(sample)
+
+        if not rotations:
+            return None
+        rotation = util.average_angles(rotations)
+        translation = util.multimidpoint(translation_samples)
+        return rotation, translation, cand_ic
 
     def _try_piece(self, pid, ori, gx, gy):
         if pid not in self.piece_images:
             return 0.0, 0, 0, 0.0
 
-        cell_x = self._grid_ox + gx * self._cell_w
-        cell_y = self._grid_oy + gy * self._cell_h
-        th, tw = self.target_aligned.shape[:2]
-
-        result = _prepare_piece_at_cell(
-            pid, ori, cell_x, cell_y, self._cell_w, self._cell_h,
-            self.piece_images[pid], self.piece_alphas[pid], th, tw)
-        if result[0] is None:
+        transform = self._compute_transform(pid, ori, gx, gy)
+        if transform is None:
             return 0.0, 0, 0, 0.0
+        rotation, translation, ic = transform
 
-        piece_gray, mask_eroded, _, _, paste_pos, size = result
+        ci = self._orig_canvas_info
+        min_x = ci['min_x']
+        min_y = ci['min_y']
+        margin = max(ci['max_x'] - min_x, ci['max_y'] - min_y) * 0.05
+        header_h = 60
+        gen_scale = 1.0
+        rs = self._orig_resize_scale
+
+        piece_bgr = self.piece_images[pid]
+        alpha_raw = self.piece_alphas[pid]
+        h_img, w_img = piece_bgr.shape[:2]
+
+        cos_r = math.cos(rotation)
+        sin_r = math.sin(rotation)
+        corners = [(0, 0), (w_img, 0), (w_img, h_img), (0, h_img)]
+        img_pts = []
+        for cx, cy in corners:
+            ddx = cx - ic[0]
+            ddy = cy - ic[1]
+            ox = ddx * cos_r - ddy * sin_r + ic[0] + translation[0]
+            oy = ddx * sin_r + ddy * cos_r + ic[1] + translation[1]
+            img_pts.append((ox, oy))
+
+        img_min_x = min(p[0] for p in img_pts)
+        img_min_y = min(p[1] for p in img_pts)
+        img_max_x = max(p[0] for p in img_pts)
+        img_max_y = max(p[1] for p in img_pts)
+
+        out_w_gen = int(math.ceil((img_max_x - img_min_x) * gen_scale)) + 2
+        out_h_gen = int(math.ceil((img_max_y - img_min_y) * gen_scale)) + 2
+
+        cos_neg = math.cos(-rotation)
+        sin_neg = math.sin(-rotation)
+        sm_x = (img_min_x - ic[0] - translation[0]) * gen_scale
+        sm_y = (img_min_y - ic[1] - translation[1]) * gen_scale
+
+        a_v = cos_neg * gen_scale
+        b_v = -sin_neg * gen_scale
+        c_v = cos_neg * sm_x - sin_neg * sm_y + ic[0]
+        d_v = sin_neg * gen_scale
+        e_v = cos_neg * gen_scale
+        f_v = sin_neg * sm_x + cos_neg * sm_y + ic[1]
+
+        M_pil = np.array([[a_v, b_v, c_v], [d_v, e_v, f_v], [0, 0, 1]], dtype=np.float64)
+        M_aff = np.linalg.inv(M_pil)[:2, :]
+
+        piece_gen = cv2.warpAffine(piece_bgr, M_aff, (out_w_gen, out_h_gen),
+                                    flags=cv2.INTER_AREA,
+                                    borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+        alpha_gen = cv2.warpAffine(alpha_raw, M_aff, (out_w_gen, out_h_gen),
+                                    flags=cv2.INTER_AREA,
+                                    borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+        out_w = max(1, int(out_w_gen * rs))
+        out_h = max(1, int(out_h_gen * rs))
+        piece_final = cv2.resize(piece_gen, (out_w, out_h), interpolation=cv2.INTER_AREA)
+        alpha_final = cv2.resize(alpha_gen, (out_w, out_h), interpolation=cv2.INTER_AREA)
+
+        mask_raw = alpha_final > 128
+        erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ERODE_PX * 2 + 1, ERODE_PX * 2 + 1))
+        mask_eroded = cv2.erode(mask_raw.astype(np.uint8), erode_kernel) > 0
+        piece_gray = cv2.cvtColor(piece_final, cv2.COLOR_BGR2GRAY)
+
+        paste_x = (img_min_x - min_x + margin) * gen_scale * rs
+        paste_y = ((img_min_y - min_y + margin) * gen_scale + header_h) * rs
+
         score, dx, dy, angle = _ncc_search(
-            piece_gray, mask_eroded, paste_pos, size, self.target_aligned)
+            piece_gray, mask_eroded, (paste_x, paste_y), (out_w, out_h), self.target_aligned)
         return score, dx, dy, angle
 
     def _draw_progress(self, iteration, output_dir):
         th, tw = self.target_aligned.shape[:2]
         canvas = self.target_aligned.copy()
 
-        transforms = self._orig_transforms
         canvas_info = self._orig_canvas_info
-        if not transforms or not canvas_info:
+        if not canvas_info:
             cv2.imwrite(os.path.join(output_dir, f'progress_iter{iteration}.png'), canvas)
             return
 
@@ -475,10 +522,11 @@ class TargetedSolver:
                     continue
                 pid, _, ori = cell
 
-                if pid not in self.piece_images or pid not in transforms:
+                if pid not in self.piece_images or pid not in self._orig_transforms:
                     continue
 
-                rotation, translation, ic = transforms[pid]
+                rotation, translation, ic = self._orig_transforms[pid]
+
                 piece_bgr = self.piece_images[pid]
                 alpha_raw = self.piece_alphas[pid]
                 h_img, w_img = piece_bgr.shape[:2]
@@ -626,6 +674,9 @@ class TargetedSolver:
                     self.ncc_data[pid] = {
                         'dx': dx, 'dy': dy, 'angle': angle, 'score': best_score,
                     }
+                    t = self._compute_transform(pid, ori, gx, gy)
+                    if t is not None:
+                        self._orig_transforms[pid] = t
                     changed = True
                     print(f"  + {pid} at ({gx},{gy}) ori={ori} NCC={best_score:.4f}")
 
@@ -673,7 +724,7 @@ class TargetedSolver:
 
 def main():
     parser = argparse.ArgumentParser(description='Targeted puzzle solver using target image NCC')
-    parser.add_argument('--target', required=True, help='Path to target image')
+    parser.add_argument('--target', default=None, help='Path to target image (optional if target_aligned.png exists)')
     parser.add_argument('--solution', required=True, help='Path to solution directory')
     parser.add_argument('--output-root', default=None, help='Root output directory')
     parser.add_argument('--threshold', type=float, default=NCC_ACCEPT)
