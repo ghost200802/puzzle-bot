@@ -138,8 +138,37 @@ def _apply_inverse_transform(points, src_mid, tgt_mid, rot):
     return _apply_transform(points, tgt_mid, src_mid, -rot)
 
 
+def _edge_tangent_at(edge_vertices, pos):
+    best_dist = float('inf')
+    best_dir = edge_vertices[-1] - edge_vertices[0]
+    n = len(edge_vertices)
+    for j in range(n - 1):
+        a = edge_vertices[j]
+        b = edge_vertices[j + 1]
+        ab = b - a
+        ab_len_sq = np.dot(ab, ab)
+        if ab_len_sq < 1e-10:
+            dist = np.linalg.norm(pos - a)
+            if dist < best_dist:
+                best_dist = dist
+                best_dir = ab
+            continue
+        t = np.dot(pos - a, ab) / ab_len_sq
+        t = max(0.0, min(1.0, t))
+        proj = a + t * ab
+        dist = np.linalg.norm(pos - proj)
+        if dist < best_dist:
+            best_dist = dist
+            best_dir = ab
+    dl = np.linalg.norm(best_dir)
+    if dl > 1e-6:
+        best_dir = best_dir / dl
+    return best_dir
+
+
 def extract_inner_band(color_image, sample_positions, piece_center, binary_mask,
-                       inner_offset=INNER_OFFSET, band_width=BAND_WIDTH):
+                       inner_offset=INNER_OFFSET, band_width=BAND_WIDTH,
+                       edge_vertices=None):
     h, w = color_image.shape[:2]
     n = len(sample_positions)
 
@@ -149,14 +178,25 @@ def extract_inner_band(color_image, sample_positions, piece_center, binary_mask,
     for i in range(n):
         pos = sample_positions[i]
 
-        if i == 0:
-            tangent = sample_positions[1] - sample_positions[0]
-        elif i == n - 1:
-            tangent = sample_positions[-1] - sample_positions[-2]
+        if edge_vertices is not None:
+            tangent = _edge_tangent_at(edge_vertices, pos)
         else:
-            tangent = sample_positions[i + 1] - sample_positions[i - 1]
+            tangents = []
+            if i > 0:
+                d = sample_positions[i] - sample_positions[i - 1]
+                dl = np.linalg.norm(d)
+                if dl > 1e-6:
+                    tangents.append(d / dl)
+            if i < n - 1:
+                d = sample_positions[i + 1] - sample_positions[i]
+                dl = np.linalg.norm(d)
+                if dl > 1e-6:
+                    tangents.append(d / dl)
+            if not tangents:
+                continue
+            tangent = np.mean(tangents, axis=0)
 
-        tlen = np.sqrt(tangent[0] ** 2 + tangent[1] ** 2)
+        tlen = np.linalg.norm(tangent)
         if tlen < 1e-6:
             continue
         tangent = tangent / tlen
@@ -311,26 +351,28 @@ def verify_match(color_dir, deduped_dir, pid_a, si_a, pid_b, si_b, shift=None):
         return result_template
 
     verts_a = side_a['vertices']
-    verts_b_flipped = side_b['vertices'][::-1].copy()
+    verts_b = side_b['vertices']
+    verts_b_flipped = verts_b[::-1].copy()
 
     sample_positions_a = _resample_polyline(verts_a, N_SAMPLES)
 
-    src_mid_bf, tgt_mid_bf, rot_bf = _compute_transform(verts_b_flipped, verts_a)
-    verts_bf_aligned = _apply_transform(verts_b_flipped, src_mid_bf, tgt_mid_bf, rot_bf)
+    src_mid_b, tgt_mid_b, rot_b = _compute_transform(verts_b, verts_a)
+    verts_bf_aligned = _apply_transform(verts_b_flipped, src_mid_b, tgt_mid_b, rot_b)
 
     corr_bf_aligned = _find_corresponding_points_on_edge(
         sample_positions_a, verts_bf_aligned
     )
 
     corr_bf_original = _apply_inverse_transform(
-        corr_bf_aligned, src_mid_bf, tgt_mid_bf, rot_bf
+        corr_bf_aligned, src_mid_b, tgt_mid_b, rot_b
     )
 
     band_a_colors, band_a_gray = extract_inner_band(
         color_a, sample_positions_a, side_a['piece_center'], mask_a
     )
     band_b_colors, band_b_gray = extract_inner_band(
-        color_b, corr_bf_original, side_b['piece_center'], mask_b
+        color_b, corr_bf_original, side_b['piece_center'], mask_b,
+        edge_vertices=verts_b_flipped
     )
 
     n = min(len(band_a_colors), len(band_b_colors))
