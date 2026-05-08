@@ -9,10 +9,7 @@ sys.path.insert(0, os.path.join(_here, '..', 'src'))
 from common import util
 
 
-def generate_assembly_png(solution, deduped_dir, output_dir, output_path):
-    from PIL import Image, ImageDraw, ImageFont
-
-    color_dir = os.path.join(output_dir, '2_piece_colors')
+def compute_piece_transforms(solution, deduped_dir):
     pw, ph = solution.width, solution.height
 
     def _angle(p1, p2):
@@ -26,7 +23,6 @@ def generate_assembly_png(solution, deduped_dir, output_dir, output_path):
                 placed_pids.add(cell[0])
 
     piece_sides_cache = {}
-    piece_imgs = {}
     for pid in placed_pids:
         sides = []
         for i in range(4):
@@ -37,9 +33,6 @@ def generate_assembly_png(solution, deduped_dir, output_dir, output_path):
             with open(json_path, 'r') as f:
                 sides.append(json.load(f))
         piece_sides_cache[pid] = sides
-        img_path = os.path.join(color_dir, f'piece_{pid}.png')
-        if os.path.exists(img_path):
-            piece_imgs[pid] = Image.open(img_path).convert('RGBA')
 
     x, y = 0, 0
     directions = [(1, 0), (0, 1), (-1, 0), (0, -1)]
@@ -205,7 +198,7 @@ def generate_assembly_png(solution, deduped_dir, output_dir, output_path):
         x, y = x + direction[0], y + direction[1]
 
     if not piece_transforms:
-        return
+        return None
 
     all_pts = []
     for pid, (rot, trans, ic) in piece_transforms.items():
@@ -218,12 +211,41 @@ def generate_assembly_png(solution, deduped_dir, output_dir, output_path):
                 tv = (rv[0] + trans[0], rv[1] + trans[1])
                 all_pts.append(tv)
     if not all_pts:
-        return
+        return {}, {}, {}
 
     min_x = min(p[0] for p in all_pts)
     max_x = max(p[0] for p in all_pts)
     min_y = min(p[1] for p in all_pts)
     max_y = max(p[1] for p in all_pts)
+
+    canvas_info = {
+        'min_x': min_x, 'min_y': min_y,
+        'max_x': max_x, 'max_y': max_y,
+    }
+
+    return piece_transforms, piece_sides_cache, canvas_info
+
+
+def generate_assembly_png(solution, deduped_dir, output_dir, output_path):
+    from PIL import Image, ImageDraw, ImageFont
+
+    pw, ph = solution.width, solution.height
+
+    piece_transforms, piece_sides_cache, canvas_info = compute_piece_transforms(solution, deduped_dir)
+    if not piece_transforms:
+        return
+
+    color_dir = os.path.join(output_dir, '2_piece_colors')
+    piece_imgs = {}
+    for pid in piece_transforms:
+        img_path = os.path.join(color_dir, f'piece_{pid}.png')
+        if os.path.exists(img_path):
+            piece_imgs[pid] = Image.open(img_path).convert('RGBA')
+
+    min_x = canvas_info['min_x']
+    min_y = canvas_info['min_y']
+    max_x = canvas_info['max_x']
+    max_y = canvas_info['max_y']
 
     data_w = max_x - min_x
     data_h = max_y - min_y
@@ -339,3 +361,4 @@ def generate_assembly_png(solution, deduped_dir, output_dir, output_path):
 
     canvas.save(output_path)
     print(f"PNG saved: {output_path}")
+    return canvas_info
