@@ -71,22 +71,90 @@ def _resample_polyline(vertices, n):
     return resampled
 
 
-def extract_inner_band(color_image, side_vertices, piece_center, binary_mask,
-                       inner_offset=INNER_OFFSET, band_width=BAND_WIDTH,
-                       n_samples=N_SAMPLES):
+def _find_corresponding_points_on_edge(src_arc_points, target_edge_vertices):
+    diffs = np.diff(target_edge_vertices, axis=0)
+    seg_lengths = np.sqrt(np.sum(diffs ** 2, axis=1))
+    cum_lengths = np.concatenate([[0], np.cumsum(seg_lengths)])
+    total_length = cum_lengths[-1]
+    n_edge = len(target_edge_vertices)
+
+    result = np.zeros_like(src_arc_points)
+    for i, sp in enumerate(src_arc_points):
+        best_dist = float('inf')
+        best_pt = sp.copy()
+
+        for j in range(n_edge - 1):
+            a = target_edge_vertices[j]
+            b = target_edge_vertices[j + 1]
+            ab = b - a
+            ab_len_sq = np.dot(ab, ab)
+            if ab_len_sq < 1e-10:
+                dist = np.linalg.norm(sp - a)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_pt = a.copy()
+                continue
+
+            t = np.dot(sp - a, ab) / ab_len_sq
+            t = max(0.0, min(1.0, t))
+            proj = a + t * ab
+            dist = np.linalg.norm(sp - proj)
+            if dist < best_dist:
+                best_dist = dist
+                best_pt = proj.copy()
+
+        result[i] = best_pt
+    return result
+
+
+def _compute_transform(src_vertices, tgt_vertices):
+    src_mid = (src_vertices[0] + src_vertices[-1]) / 2.0
+    tgt_mid = (tgt_vertices[0] + tgt_vertices[-1]) / 2.0
+    src_theta = math.atan2(
+        src_vertices[-1][1] - src_vertices[0][1],
+        src_vertices[-1][0] - src_vertices[0][0]
+    )
+    tgt_theta = math.atan2(
+        tgt_vertices[-1][1] - tgt_vertices[0][1],
+        tgt_vertices[-1][0] - tgt_vertices[0][0]
+    )
+    rot = tgt_theta + math.pi - src_theta
+    return src_mid, tgt_mid, rot
+
+
+def _apply_transform(points, src_mid, tgt_mid, rot):
+    cos_r = math.cos(rot)
+    sin_r = math.sin(rot)
+    result = np.zeros_like(points)
+    for i, v in enumerate(points):
+        dx = v[0] - src_mid[0]
+        dy = v[1] - src_mid[1]
+        result[i][0] = dx * cos_r - dy * sin_r + tgt_mid[0]
+        result[i][1] = dx * sin_r + dy * cos_r + tgt_mid[1]
+    return result
+
+
+def _apply_inverse_transform(points, src_mid, tgt_mid, rot):
+    return _apply_transform(points, tgt_mid, src_mid, -rot)
+
+
+def extract_inner_band(color_image, sample_positions, piece_center, binary_mask,
+                       inner_offset=INNER_OFFSET, band_width=BAND_WIDTH):
     h, w = color_image.shape[:2]
-    resampled = _resample_polyline(side_vertices, n_samples)
+    n = len(sample_positions)
 
     band_colors = []
     band_gray_values = []
 
-    for i in range(n_samples):
+    for i in range(n):
+        pos = sample_positions[i]
+
         if i == 0:
-            tangent = resampled[1] - resampled[0]
-        elif i == n_samples - 1:
-            tangent = resampled[-1] - resampled[-2]
+            tangent = sample_positions[1] - sample_positions[0]
+        elif i == n - 1:
+            tangent = sample_positions[-1] - sample_positions[-2]
         else:
-            tangent = resampled[i + 1] - resampled[i - 1]
+            tangent = sample_positions[i + 1] - sample_positions[i - 1]
 
         tlen = np.sqrt(tangent[0] ** 2 + tangent[1] ** 2)
         if tlen < 1e-6:
@@ -95,13 +163,13 @@ def extract_inner_band(color_image, side_vertices, piece_center, binary_mask,
 
         normal = np.array([-tangent[1], tangent[0]])
 
-        to_center = piece_center - resampled[i]
+        to_center = piece_center - pos
         if np.dot(normal, to_center) < 0:
             normal = -normal
 
         colors = []
         for d in range(inner_offset, inner_offset + band_width):
-            pt = resampled[i] + normal * d
+            pt = pos + normal * d
             px_c, py_c = int(round(pt[0])), int(round(pt[1]))
             patch_pixels = []
             for dy in range(-SAMPLE_RADIUS, SAMPLE_RADIUS + 1):
@@ -242,13 +310,27 @@ def verify_match(color_dir, deduped_dir, pid_a, si_a, pid_b, si_b, shift=None):
         result_template['reason'] = 'no_color_data'
         return result_template
 
-    band_a_colors, band_a_gray = extract_inner_band(
-        color_a, side_a['vertices'], side_a['piece_center'], mask_a
+    verts_a = side_a['vertices']
+    verts_b_flipped = side_b['vertices'][::-1].copy()
+
+    sample_positions_a = _resample_polyline(verts_a, N_SAMPLES)
+
+    src_mid_bf, tgt_mid_bf, rot_bf = _compute_transform(verts_b_flipped, verts_a)
+    verts_bf_aligned = _apply_transform(verts_b_flipped, src_mid_bf, tgt_mid_bf, rot_bf)
+
+    corr_bf_aligned = _find_corresponding_points_on_edge(
+        sample_positions_a, verts_bf_aligned
     )
 
-    vertices_b_flipped = side_b['vertices'][::-1].copy()
+    corr_bf_original = _apply_inverse_transform(
+        corr_bf_aligned, src_mid_bf, tgt_mid_bf, rot_bf
+    )
+
+    band_a_colors, band_a_gray = extract_inner_band(
+        color_a, sample_positions_a, side_a['piece_center'], mask_a
+    )
     band_b_colors, band_b_gray = extract_inner_band(
-        color_b, vertices_b_flipped, side_b['piece_center'], mask_b
+        color_b, corr_bf_original, side_b['piece_center'], mask_b
     )
 
     n = min(len(band_a_colors), len(band_b_colors))
