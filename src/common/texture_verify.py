@@ -4,7 +4,7 @@ import math
 import numpy as np
 import cv2
 
-INNER_OFFSET = 6
+INNER_OFFSET = 11
 BAND_WIDTH = 15
 N_SAMPLES = 30
 SAMPLE_RADIUS = 2
@@ -172,8 +172,8 @@ def extract_inner_band(color_image, sample_positions, binary_mask,
     h, w = color_image.shape[:2]
     n = len(sample_positions)
 
-    band_colors = []
-    band_gray_values = []
+    band_colors = [None] * n
+    band_gray_values = [None] * n
 
     for i in range(n):
         pos = sample_positions[i]
@@ -223,13 +223,14 @@ def extract_inner_band(color_image, sample_positions, binary_mask,
         if colors:
             avg_color = np.mean(colors, axis=0)
             gray = 0.114 * avg_color[0] + 0.587 * avg_color[1] + 0.299 * avg_color[2]
-            band_colors.append(avg_color)
-            band_gray_values.append(gray)
+            band_colors[i] = avg_color
+            band_gray_values[i] = gray
 
-    if not band_colors:
+    valid_a = [i for i in range(n) if band_gray_values[i] is not None]
+    if not valid_a:
         return np.array([]).reshape(0, 3), np.array([])
 
-    return np.array(band_colors), np.array(band_gray_values)
+    return band_colors, band_gray_values
 
 
 def compute_texture_richness(band_gray):
@@ -376,21 +377,23 @@ def verify_match(color_dir, deduped_dir, pid_a, si_a, pid_b, si_b, shift=None):
     )
 
     n = min(len(band_a_colors), len(band_b_colors))
-    if n < 5:
+    valid_indices = [i for i in range(n)
+                     if band_a_gray[i] is not None and band_b_gray[i] is not None]
+    if len(valid_indices) < 5:
         result_template['reason'] = 'too_few_samples'
-        result_template['n_samples'] = n
+        result_template['n_samples'] = len(valid_indices)
         return result_template
 
-    band_a_colors = band_a_colors[:n]
-    band_b_colors = band_b_colors[:n]
-    band_a_gray = band_a_gray[:n]
-    band_b_gray = band_b_gray[:n]
+    a_colors = np.array([band_a_colors[i] for i in valid_indices])
+    b_colors = np.array([band_b_colors[i] for i in valid_indices])
+    a_gray = np.array([band_a_gray[i] for i in valid_indices])
+    b_gray = np.array([band_b_gray[i] for i in valid_indices])
 
-    color_diff_mean, color_diff_median = compute_seam_color_diff(band_a_colors, band_b_colors)
-    ncc = compute_pattern_ncc(band_a_gray, band_b_gray)
+    color_diff_mean, color_diff_median = compute_seam_color_diff(a_colors, b_colors)
+    ncc = compute_pattern_ncc(a_gray, b_gray)
 
-    tex_a = compute_texture_richness(band_a_gray)
-    tex_b = compute_texture_richness(band_b_gray)
+    tex_a = compute_texture_richness(a_gray)
+    tex_b = compute_texture_richness(b_gray)
     min_tex = min(tex_a, tex_b)
 
     result_template['color_diff_mean'] = color_diff_mean
@@ -398,7 +401,7 @@ def verify_match(color_dir, deduped_dir, pid_a, si_a, pid_b, si_b, shift=None):
     result_template['ncc'] = round(ncc, 4)
     result_template['texture_a'] = round(tex_a, 4)
     result_template['texture_b'] = round(tex_b, 4)
-    result_template['n_samples'] = n
+    result_template['n_samples'] = len(valid_indices)
 
     if min_tex < TEXTURE_LOW_THRESHOLD:
         result_template['texture_level'] = 'low'
@@ -408,7 +411,7 @@ def verify_match(color_dir, deduped_dir, pid_a, si_a, pid_b, si_b, shift=None):
         return result_template
 
     result_template['texture_level'] = 'rich'
-    grad_score = compute_gradient_consistency(band_a_gray, band_b_gray)
+    grad_score = compute_gradient_consistency(a_gray, b_gray)
 
     if grad_score is None:
         reject = color_diff_mean > COLOR_DIFF_REJECT_LOOSE
