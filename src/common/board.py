@@ -327,7 +327,7 @@ def build_from_corner(ps, start_piece_id, edge_length,
         if iteration % 1000 == 0:
             now = time.time()
             elapsed = now - t_start
-            print(f"  iter {iteration:>8d} | cur {board.placed_count:>3d} | best {longest:>3d}/{total} | cost {priority:.4f} | {elapsed:.1f}s")
+            print(f"  iter {iteration:>8d} | cur {board.placed_count:>3d} | best {longest:>3d}/{total} | cost {priority:.4f} | q {len(priority_q)} | {elapsed:.1f}s")
             last_report = now
 
             if (iteration > MAX_ITERATIONS_TO_FIND_BORDER and longest < edge_length) or iteration > MAX_ITERATIONS:
@@ -449,6 +449,13 @@ def build_from_corner(ps, start_piece_id, edge_length,
 
             data = [next_board, pid, ori, next_x, next_y, next_direction]
             heapq.heappush(priority_q, (combined, data))
+
+        MAX_QUEUE_SIZE = 200000
+        if len(priority_q) > MAX_QUEUE_SIZE:
+            keep = MAX_QUEUE_SIZE // 2
+            priority_q.sort(key=lambda entry: entry[0])
+            del priority_q[keep:]
+            heapq.heapify(priority_q)
 
     if board.placed_count == total:
         print(f"Found solution after {iteration} iterations!")
