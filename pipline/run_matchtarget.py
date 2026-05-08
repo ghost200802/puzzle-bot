@@ -4,6 +4,7 @@ import json
 import math
 import argparse
 import re
+import time
 
 import cv2
 import numpy as np
@@ -32,7 +33,7 @@ def load_solution(solution_dir):
         alt = os.path.join(parent, 'solution_meta.json')
         if os.path.exists(alt):
             with open(alt, 'r') as f:
-                meta = json.load(f)
+                meta = json.load(alt)
             pw = meta.get('width', 0)
             ph = meta.get('height', 0)
 
@@ -129,6 +130,19 @@ def _ncc_score(img_a, img_b):
     return float(np.mean(a * b) / (sa * sb))
 
 
+def _histogram_match_cdf(src_vals, ref_vals):
+    src_hist, _ = np.histogram(src_vals.astype(np.uint8), bins=256, range=(0, 256))
+    ref_hist, _ = np.histogram(ref_vals.astype(np.uint8), bins=256, range=(0, 256))
+    src_cdf = np.cumsum(src_hist).astype(np.float64)
+    ref_cdf = np.cumsum(ref_hist).astype(np.float64)
+    src_cdf /= src_cdf[-1] if src_cdf[-1] > 0 else 1
+    ref_cdf /= ref_cdf[-1] if ref_cdf[-1] > 0 else 1
+    mapping = np.zeros(256, dtype=np.uint8)
+    for i in range(256):
+        mapping[i] = int(np.argmin(np.abs(ref_cdf - src_cdf[i])))
+    return mapping
+
+
 class TargetMatcher:
     def __init__(self, target_image_path, pw, ph, placed, output_dir,
                  piece_color_dir=None, deduped_dir=None, output_root=None):
@@ -160,6 +174,11 @@ class TargetMatcher:
         self._grid_offset_y = 0.0
         self._canvas_info = None
         self._resize_scale = 1.0
+        self._gen_scale = 1.0
+        self._margin = 0.0
+        self._header_h = 60
+        self._piece_transforms = None
+        self._erode_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
 
     def _find_dir(self, dirname):
         d = self.output_dir
@@ -203,6 +222,7 @@ class TargetMatcher:
         print(f"  Assembly generated, resized to {aw}x{ah}")
 
         self._canvas_info = canvas_info
+        self._piece_transforms, _, _ = compute_piece_transforms(sol_board, self.deduped_dir)
         return True
 
     def _compute_grid_layout(self):
@@ -230,21 +250,21 @@ class TargetMatcher:
             self._grid_offset_y = m
             return
 
-        margin = max(data_w, data_h) * 0.05
-        header_h = 60
+        self._margin = max(data_w, data_h) * 0.05
+        self._header_h = 60
 
-        canvas_w = data_w + 2 * margin
-        canvas_h = data_h + 2 * margin + header_h
+        canvas_w = data_w + 2 * self._margin
+        canvas_h = data_h + 2 * self._margin + self._header_h
         max_size = 12000
         if max(canvas_w, canvas_h) > max_size:
-            gen_scale = max_size / max(canvas_w, canvas_h)
+            self._gen_scale = max_size / max(canvas_w, canvas_h)
         else:
-            gen_scale = 1.0
+            self._gen_scale = 1.0
 
-        grid_x = margin * gen_scale
-        grid_y = margin * gen_scale + header_h
-        grid_w = data_w * gen_scale
-        grid_h = data_h * gen_scale
+        grid_x = self._margin * self._gen_scale
+        grid_y = self._margin * self._gen_scale + self._header_h
+        grid_w = data_w * self._gen_scale
+        grid_h = data_h * self._gen_scale
 
         rs = self._resize_scale
         self._grid_offset_x = grid_x * rs
@@ -252,8 +272,8 @@ class TargetMatcher:
         self._cell_w = grid_w * rs / self.pw
         self._cell_h = grid_h * rs / self.ph
 
-        print(f"  Grid layout (analytical): offset=({self._grid_offset_x:.1f},{self._grid_offset_y:.1f}), "
-              f"cell={self._cell_w:.1f}x{self._cell_h:.1f}")
+        print(f"  Grid layout: offset=({self._grid_offset_x:.1f},{self._grid_offset_y:.1f}), "
+              f"cell={self._cell_w:.1f}x{self._cell_h:.1f}, gen_scale={self._gen_scale:.4f}")
 
     def rectify_target(self):
         if not self._generate_assembly():
@@ -321,118 +341,266 @@ class TargetMatcher:
         cv2.imwrite(aligned_path, self.target_aligned)
         print(f"  Aligned target saved: {aligned_path}")
 
+    def _prepare_piece(self, pid):
+        if self._piece_transforms is None or pid not in self._piece_transforms:
+            return None, None, None, None, None, None
+
+        rotation, translation, ic = self._piece_transforms[pid]
+        color_path = os.path.join(self.color_dir, f'piece_{pid}.png')
+        if not os.path.exists(color_path):
+            return None, None, None, None, None, None
+
+        piece_img = cv2.imread(color_path, cv2.IMREAD_UNCHANGED)
+        if piece_img is None:
+            return None, None, None, None, None, None
+
+        if piece_img.ndim == 2:
+            piece_bgr = cv2.cvtColor(piece_img, cv2.COLOR_GRAY2BGR)
+            alpha_raw = np.full_like(piece_img, 255, dtype=np.uint8)
+        elif piece_img.shape[2] == 4:
+            piece_bgr = piece_img[:, :, :3]
+            alpha_raw = piece_img[:, :, 3]
+        else:
+            piece_bgr = piece_img
+            alpha_raw = np.full(piece_img.shape[:2], 255, dtype=np.uint8)
+
+        h_img, w_img = piece_bgr.shape[:2]
+        cos_r = math.cos(rotation)
+        sin_r = math.sin(rotation)
+
+        corners = [(0, 0), (w_img, 0), (w_img, h_img), (0, h_img)]
+        img_pts = []
+        for cx, cy in corners:
+            dx = cx - ic[0]
+            dy = cy - ic[1]
+            ox = dx * cos_r - dy * sin_r + ic[0] + translation[0]
+            oy = dx * sin_r + dy * cos_r + ic[1] + translation[1]
+            img_pts.append((ox, oy))
+
+        img_min_x = min(p[0] for p in img_pts)
+        img_min_y = min(p[1] for p in img_pts)
+        img_max_x = max(p[0] for p in img_pts)
+        img_max_y = max(p[1] for p in img_pts)
+
+        gs = self._gen_scale
+        out_w_gen = int(math.ceil((img_max_x - img_min_x) * gs)) + 2
+        out_h_gen = int(math.ceil((img_max_y - img_min_y) * gs)) + 2
+
+        cos_neg = math.cos(-rotation)
+        sin_neg = math.sin(-rotation)
+        sm_x = (img_min_x - ic[0] - translation[0]) * gs
+        sm_y = (img_min_y - ic[1] - translation[1]) * gs
+
+        a_v = cos_neg * gs
+        b_v = -sin_neg * gs
+        c_v = cos_neg * sm_x - sin_neg * sm_y + ic[0]
+        d_v = sin_neg * gs
+        e_v = cos_neg * gs
+        f_v = sin_neg * sm_x + cos_neg * sm_y + ic[1]
+
+        M_pil = np.array([[a_v, b_v, c_v], [d_v, e_v, f_v], [0, 0, 1]], dtype=np.float64)
+        M_aff = np.linalg.inv(M_pil)[:2, :]
+
+        piece_gen = cv2.warpAffine(piece_bgr, M_aff, (out_w_gen, out_h_gen),
+                                    flags=cv2.INTER_AREA,
+                                    borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+        alpha_gen = cv2.warpAffine(alpha_raw, M_aff, (out_w_gen, out_h_gen),
+                                    flags=cv2.INTER_AREA,
+                                    borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+        rs = self._resize_scale
+        out_w = max(1, int(out_w_gen * rs))
+        out_h = max(1, int(out_h_gen * rs))
+
+        piece_final = cv2.resize(piece_gen, (out_w, out_h), interpolation=cv2.INTER_AREA)
+        alpha_final = cv2.resize(alpha_gen, (out_w, out_h), interpolation=cv2.INTER_AREA)
+
+        mask_eroded = cv2.erode((alpha_final > 128).astype(np.uint8), self._erode_kernel) > 0
+        mask_raw = alpha_final > 128
+        piece_gray = cv2.cvtColor(piece_final, cv2.COLOR_BGR2GRAY)
+
+        paste_x = (img_min_x - self._canvas_info['min_x'] + self._margin) * gs * rs
+        paste_y = ((img_min_y - self._canvas_info['min_y'] + self._margin) * gs + self._header_h) * rs
+
+        return piece_gray, mask_eroded, (paste_x, paste_y), (out_w, out_h), piece_final, mask_raw
+
     def _match_single_piece(self, pid, info):
-        gx, gy = info['gx'], info['gy']
-
-        x1 = int(self._grid_offset_x + gx * self._cell_w)
-        y1 = int(self._grid_offset_y + gy * self._cell_h)
-        x2 = int(self._grid_offset_x + (gx + 1) * self._cell_w)
-        y2 = int(self._grid_offset_y + (gy + 1) * self._cell_h)
-
-        ah, aw = self._assembly_img.shape[:2]
-
-        assembly_cell = self._assembly_img[max(0,y1):min(ah,y2), max(0,x1):min(aw,x2)]
-        if assembly_cell.size == 0:
+        piece_gray, mask_eroded, paste_pos, size, _, _ = self._prepare_piece(pid)
+        if piece_gray is None:
             return None
 
-        ac_gray = cv2.cvtColor(assembly_cell, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        if ac_gray.std() < 5:
-            return {'score': 0.0, 'ncc_score': 0.0, 'hist_score': 0.0,
-                    'dx': 0.0, 'dy': 0.0, 'angle': 0.0}
+        paste_x, paste_y = paste_pos
+        out_w, out_h = size
+        th, tw = self.target_aligned.shape[:2]
+        search_margin = 40
 
-        margin_px = int(max(self._cell_w, self._cell_h) * 0.3)
+        tx1 = max(0, int(paste_x) - search_margin)
+        ty1 = max(0, int(paste_y) - search_margin)
+        tx2 = min(tw, int(paste_x + out_w) + search_margin)
+        ty2 = min(th, int(paste_y + out_h) + search_margin)
+        target_region_gray = cv2.cvtColor(
+            self.target_aligned[ty1:ty2, tx1:tx2], cv2.COLOR_BGR2GRAY)
 
-        tx1 = max(0, x1 - margin_px)
-        ty1 = max(0, y1 - margin_px)
-        tx2 = min(aw, x2 + margin_px)
-        ty2 = min(ah, y2 + margin_px)
-        target_region = self.target_aligned[ty1:ty2, tx1:tx2]
-
-        search_scale = 0.5
-        small_cell = cv2.resize(assembly_cell, None, fx=search_scale, fy=search_scale,
-                                interpolation=cv2.INTER_AREA)
-        small_target = cv2.resize(target_region, None, fx=search_scale, fy=search_scale,
-                                  interpolation=cv2.INTER_AREA)
-
-        max_dx = int(margin_px * search_scale)
-        max_dy = int(margin_px * search_scale)
-        angles = np.arange(-5, 5.5, 1.0)
-
-        cell_hs, cell_ws = small_cell.shape[:2]
-        ths, tws = small_target.shape[:2]
-
-        base_y = int((y1 - ty1) * search_scale)
-        base_x = int((x1 - tx1) * search_scale)
+        base_x = int(paste_x) - tx1
+        base_y = int(paste_y) - ty1
 
         best_score = -999
-        best_params = (0, 0, 0.0)
+        best_dx = 0
+        best_dy = 0
 
-        for angle in angles:
-            if abs(angle) < 0.01:
-                rotated = small_cell
-            else:
-                M = cv2.getRotationMatrix2D((cell_ws / 2, cell_hs / 2), angle, 1.0)
-                rotated = cv2.warpAffine(small_cell, M, (cell_ws, cell_hs),
-                                         borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
+        coarse_step = 4
+        for dy in range(-search_margin, search_margin + 1, coarse_step):
+            for dx in range(-search_margin, search_margin + 1, coarse_step):
+                rx = base_x + dx
+                ry = base_y + dy
+                x1t = max(0, rx)
+                y1t = max(0, ry)
+                x2t = min(target_region_gray.shape[1], rx + out_w)
+                y2t = min(target_region_gray.shape[0], ry + out_h)
+                x1p = x1t - rx
+                y1p = y1t - ry
+                pw_ = x2t - x1t
+                ph_ = y2t - y1t
+                if pw_ <= 0 or ph_ <= 0:
+                    continue
+                m = mask_eroded[y1p:y1p + ph_, x1p:x1p + pw_]
+                if m.sum() < 100:
+                    continue
+                p = piece_gray[y1p:y1p + ph_, x1p:x1p + pw_][m].astype(np.float64)
+                t = target_region_gray[y1t:y1t + ph_, x1t:x1t + pw_][m].astype(np.float64)
+                p_n = p - p.mean()
+                t_n = t - t.mean()
+                denom = np.sqrt(np.sum(p_n ** 2) * np.sum(t_n ** 2))
+                score = float(np.sum(p_n * t_n) / denom) if denom > 1e-6 else 0.0
+                if score > best_score:
+                    best_score = score
+                    best_dx = dx
+                    best_dy = dy
 
-            rh, rw = rotated.shape[:2]
+        fine_range = coarse_step + 1
+        for dy in range(best_dy - fine_range, best_dy + fine_range + 1):
+            for dx in range(best_dx - fine_range, best_dx + fine_range + 1):
+                rx = base_x + dx
+                ry = base_y + dy
+                x1t = max(0, rx)
+                y1t = max(0, ry)
+                x2t = min(target_region_gray.shape[1], rx + out_w)
+                y2t = min(target_region_gray.shape[0], ry + out_h)
+                x1p = x1t - rx
+                y1p = y1t - ry
+                pw_ = x2t - x1t
+                ph_ = y2t - y1t
+                if pw_ <= 0 or ph_ <= 0:
+                    continue
+                m = mask_eroded[y1p:y1p + ph_, x1p:x1p + pw_]
+                if m.sum() < 100:
+                    continue
+                p = piece_gray[y1p:y1p + ph_, x1p:x1p + pw_][m].astype(np.float64)
+                t = target_region_gray[y1t:y1t + ph_, x1t:x1t + pw_][m].astype(np.float64)
+                p_n = p - p.mean()
+                t_n = t - t.mean()
+                denom = np.sqrt(np.sum(p_n ** 2) * np.sum(t_n ** 2))
+                score = float(np.sum(p_n * t_n) / denom) if denom > 1e-6 else 0.0
+                if score > best_score:
+                    best_score = score
+                    best_dx = dx
+                    best_dy = dy
 
-            for dy in range(-max_dy, max_dy + 1, 2):
-                for dx in range(-max_dx, max_dx + 1, 2):
-                    y_s = base_y + dy
-                    x_s = base_x + dx
-                    y_e = y_s + rh
-                    x_e = x_s + rw
+        # Phase 2: rotation search at best translation
+        fx = int(paste_x) + best_dx
+        fy = int(paste_y) + best_dy
+        fx1 = max(0, fx)
+        fy1 = max(0, fy)
+        fx2 = min(tw, fx + out_w)
+        fy2 = min(th, fy + out_h)
+        px1 = fx1 - fx
+        py1 = fy1 - fy
+        pw_ = fx2 - fx1
+        ph_ = fy2 - fy1
 
-                    if y_s < 0 or x_s < 0 or y_e > ths or x_e > tws:
-                        continue
+        target_at_best_gray = cv2.cvtColor(
+            self.target_aligned[fy1:fy2, fx1:fx2], cv2.COLOR_BGR2GRAY)
 
-                    region = small_target[y_s:y_e, x_s:x_e]
-                    score = _ncc_score(region, rotated)
-                    if score > best_score:
-                        best_score = score
-                        best_params = (dx / search_scale, dy / search_scale, angle)
+        angles = np.arange(-5, 5.5, 0.5)
+        best_angle = 0.0
+
+        if best_score < 0.2:
+            pass
+        else:
+            for angle in angles:
+                if abs(angle) < 0.01:
+                    rot_gray = piece_gray[py1:py1 + ph_, px1:px1 + pw_]
+                    rot_mask = mask_eroded[py1:py1 + ph_, px1:px1 + pw_]
+                else:
+                    M_rot = cv2.getRotationMatrix2D((out_w / 2, out_h / 2), angle, 1.0)
+                    rot_bgr = cv2.warpAffine(
+                        cv2.cvtColor(piece_gray, cv2.COLOR_GRAY2BGR), M_rot, (out_w, out_h),
+                        borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+                    rot_gray = cv2.cvtColor(rot_bgr, cv2.COLOR_BGR2GRAY)
+                    rot_alpha = cv2.warpAffine(
+                        (mask_eroded.astype(np.uint8) * 255), M_rot, (out_w, out_h),
+                        borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+                    rot_mask = cv2.erode(rot_alpha, self._erode_kernel) > 0
+                    rot_gray = rot_gray[py1:py1 + ph_, px1:px1 + pw_]
+                    rot_mask = rot_mask[py1:py1 + ph_, px1:px1 + pw_]
+
+                m = rot_mask
+                if m.sum() < 100:
+                    continue
+                p = rot_gray[m].astype(np.float64)
+                t = target_at_best_gray[m].astype(np.float64)
+                p_n = p - p.mean()
+                t_n = t - t.mean()
+                denom = np.sqrt(np.sum(p_n ** 2) * np.sum(t_n ** 2))
+                score = float(np.sum(p_n * t_n) / denom) if denom > 1e-6 else 0.0
+                if score > best_score:
+                    best_score = score
+                    best_angle = angle
+
+        # Phase 3: histmatch NCC at final position
+        if abs(best_angle) < 0.01:
+            final_gray = piece_gray[py1:py1 + ph_, px1:px1 + pw_]
+            final_mask = mask_eroded[py1:py1 + ph_, px1:px1 + pw_]
+        else:
+            M_rot = cv2.getRotationMatrix2D((out_w / 2, out_h / 2), best_angle, 1.0)
+            rot_bgr = cv2.warpAffine(
+                cv2.cvtColor(piece_gray, cv2.COLOR_GRAY2BGR), M_rot, (out_w, out_h),
+                borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+            final_gray = cv2.cvtColor(rot_bgr, cv2.COLOR_BGR2GRAY)
+            rot_alpha = cv2.warpAffine(
+                (mask_eroded.astype(np.uint8) * 255), M_rot, (out_w, out_h),
+                borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+            final_mask = cv2.erode(rot_alpha, self._erode_kernel) > 0
+            final_gray = final_gray[py1:py1 + ph_, px1:px1 + pw_]
+            final_mask = final_mask[py1:py1 + ph_, px1:px1 + pw_]
+
+        hm_score = best_score
+        if final_mask.sum() >= 100:
+            p = final_gray[final_mask].astype(np.float64)
+            t = target_at_best_gray[final_mask].astype(np.float64)
+            hm_map = _histogram_match_cdf(p, t)
+            pm = hm_map[p.astype(np.uint8)].astype(np.float64)
+            pm_n = pm - pm.mean()
+            t_n = t - t.mean()
+            denom = np.sqrt(np.sum(pm_n ** 2) * np.sum(t_n ** 2))
+            hm_score = float(np.sum(pm_n * t_n) / denom) if denom > 1e-6 else 0.0
 
         ncc_score = max(0, best_score)
-        dx_final, dy_final, angle_final = best_params
+        combined = max(ncc_score, hm_score)
 
-        rx1 = max(0, x1 + int(dx_final))
-        ry1 = max(0, y1 + int(dy_final))
-        rx2 = min(aw, x2 + int(dx_final))
-        ry2 = min(ah, y2 + int(dy_final))
-        target_at_best = self.target_aligned[ry1:ry2, rx1:rx2]
-        assembly_at_best = self._assembly_img[max(0,y1):min(ah,y2), max(0,x1):min(aw,x2)]
-
-        min_h = min(target_at_best.shape[0], assembly_at_best.shape[0])
-        min_w = min(target_at_best.shape[1], assembly_at_best.shape[1])
-        if min_h > 0 and min_w > 0:
-            tc_hsv = cv2.cvtColor(target_at_best[:min_h, :min_w], cv2.COLOR_BGR2HSV)
-            ac_hsv = cv2.cvtColor(assembly_at_best[:min_h, :min_w], cv2.COLOR_BGR2HSV)
-            mask = np.ones(tc_hsv.shape[:2], dtype=np.uint8) * 255
-            hist_tc = cv2.calcHist([tc_hsv], [0, 1], mask, [36, 32], [0, 180, 0, 256])
-            hist_ac = cv2.calcHist([ac_hsv], [0, 1], mask, [36, 32], [0, 180, 0, 256])
-            cv2.normalize(hist_tc, hist_tc)
-            cv2.normalize(hist_ac, hist_ac)
-            hist_score = max(0, float(cv2.compareHist(
-                hist_tc.astype(np.float32), hist_ac.astype(np.float32), cv2.HISTCMP_CORREL
-            )))
-        else:
-            hist_score = 0.0
-
-        combined = 0.6 * ncc_score + 0.4 * hist_score
         return {
             'score': combined,
             'ncc_score': ncc_score,
-            'hist_score': hist_score,
-            'dx': float(dx_final),
-            'dy': float(dy_final),
-            'angle': float(angle_final),
+            'hist_score': max(0, hm_score),
+            'dx': float(best_dx),
+            'dy': float(best_dy),
+            'angle': float(best_angle),
         }
 
     def match_all_pieces(self):
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
-        print("\n--- Phase 3: Per-Piece Matching (with rotation+translation search) ---")
+        print("\n--- Phase 3: Per-Piece Matching (color image + translation + rotation) ---")
         results = {}
         pids = sorted(self.placed.keys())
         total = len(pids)
@@ -440,6 +608,7 @@ class TargetMatcher:
         n_workers = min(8, os.cpu_count() or 4)
         print(f"  Using {n_workers} threads for {total} pieces")
 
+        t0 = time.time()
         with ThreadPoolExecutor(max_workers=n_workers) as executor:
             futures = {}
             for pid in pids:
@@ -458,14 +627,17 @@ class TargetMatcher:
 
                 done_count += 1
                 if done_count % 10 == 0 or done_count == total:
-                    print(f"  Matched {done_count}/{total} pieces")
+                    elapsed = time.time() - t0
+                    print(f"  Matched {done_count}/{total} ({elapsed:.1f}s)")
 
+        elapsed = time.time() - t0
         self.match_results = results
 
         scores = [r['score'] for r in results.values()]
         if scores:
             print(f"  Score stats: min={min(scores):.3f}, max={max(scores):.3f}, "
                   f"mean={np.mean(scores):.3f}, median={np.median(scores):.3f}")
+        print(f"  Total matching time: {elapsed:.1f}s")
         return results
 
     def refine_positions(self, threshold=0.7):
@@ -512,29 +684,59 @@ class TargetMatcher:
         out = output_dir or self.output_dir
         os.makedirs(out, exist_ok=True)
 
-        assembly_path = os.path.join(self.output_dir, '_match_assembly.png')
-        if not os.path.exists(assembly_path) or self._assembly_img is None:
-            print("  No assembly image, skipping visual")
-            return
-
-        assembly_bgr = self._assembly_img
-        ah, aw = assembly_bgr.shape[:2]
-
-        gray = cv2.cvtColor(assembly_bgr, cv2.COLOR_BGR2GRAY)
-        _, mask = cv2.threshold(gray, 250, 255, cv2.THRESH_BINARY_INV)
-        mask = mask.astype(np.float32) / 255.0
-        mask_3 = np.stack([mask] * 3, axis=2)
-
-        target_bgr = self.target_aligned
+        target_bgr = self.target_aligned.copy()
         th, tw = target_bgr.shape[:2]
 
-        if (th, tw) != (ah, aw):
-            target_bgr = cv2.resize(target_bgr, (aw, ah))
+        for pid, result in self.match_results.items():
+            piece_gray, mask_eroded, paste_pos, size, piece_bgr, mask_raw = self._prepare_piece(pid)
+            if piece_bgr is None:
+                continue
 
-        blended = target_bgr.astype(np.float32) * (1 - mask_3 * 0.6) + assembly_bgr.astype(np.float32) * (mask_3 * 0.6)
-        blended = np.clip(blended, 0, 255).astype(np.uint8)
+            paste_x, paste_y = paste_pos
+            out_w, out_h = size
+            dx = result.get('dx', 0)
+            dy = result.get('dy', 0)
+            angle = result.get('angle', 0)
 
-        overlay_pil = Image.fromarray(cv2.cvtColor(blended, cv2.COLOR_BGR2RGBA))
+            if abs(angle) > 0.01:
+                M_rot = cv2.getRotationMatrix2D((out_w / 2, out_h / 2), angle, 1.0)
+                piece_bgr = cv2.warpAffine(piece_bgr, M_rot, (out_w, out_h),
+                                            borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+                alpha_uint8 = (mask_raw.astype(np.uint8)) * 255
+                alpha_rot = cv2.warpAffine(alpha_uint8, M_rot, (out_w, out_h),
+                                            borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+                mask_raw = alpha_rot > 128
+
+            fx = int(paste_x) + int(dx)
+            fy = int(paste_y) + int(dy)
+
+            px1 = max(0, fx)
+            py1 = max(0, fy)
+            px2 = min(tw, fx + out_w)
+            py2 = min(th, fy + out_h)
+
+            sx1 = px1 - fx
+            sy1 = py1 - fy
+            sx2 = sx1 + (px2 - px1)
+            sy2 = sy1 + (py2 - py1)
+
+            if sx2 <= sx1 or sy2 <= sy1:
+                continue
+
+            m = mask_raw[sy1:sy2, sx1:sx2]
+            if m.sum() < 50:
+                continue
+
+            blend = m.astype(np.float32) / 255.0 * 0.7
+            blend3 = np.stack([blend] * 3, axis=2)
+
+            region = target_bgr[py1:py2, px1:px2]
+            piece_region = piece_bgr[sy1:sy2, sx1:sx2]
+            target_bgr[py1:py2, px1:px2] = (
+                region.astype(np.float32) * (1 - blend3) + piece_region.astype(np.float32) * blend3
+            ).astype(np.uint8)
+
+        overlay_pil = Image.fromarray(cv2.cvtColor(target_bgr, cv2.COLOR_BGR2RGBA))
         draw = ImageDraw.Draw(overlay_pil)
 
         try:
@@ -546,11 +748,13 @@ class TargetMatcher:
             info = self.placed[pid]
             gx, gy = info['gx'], info['gy']
             score = result.get('score', 0)
+            dx = result.get('dx', 0)
+            dy = result.get('dy', 0)
 
-            x1 = int(self._grid_offset_x + gx * self._cell_w)
-            y1 = int(self._grid_offset_y + gy * self._cell_h)
-            x2 = int(self._grid_offset_x + (gx + 1) * self._cell_w)
-            y2 = int(self._grid_offset_y + (gy + 1) * self._cell_h)
+            x1 = int(self._grid_offset_x + gx * self._cell_w + dx)
+            y1 = int(self._grid_offset_y + gy * self._cell_h + dy)
+            x2 = x1 + int(self._cell_w)
+            y2 = y1 + int(self._cell_h)
 
             if score >= 0.7:
                 color = (0, 200, 0, 200)
