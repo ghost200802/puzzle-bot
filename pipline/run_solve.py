@@ -120,7 +120,21 @@ def trace_border_edge(start_pid, start_out_side, ps, piece_edge_info):
     return count
 
 
-def determine_dimensions(ps, corners, piece_edge_info):
+def _infer_from_piece_count(n_pieces, hint=None):
+    candidates = []
+    for w in range(2, int(n_pieces ** 0.5) + 1):
+        if n_pieces % w == 0:
+            h = n_pieces // w
+            candidates.append((w, h))
+    if not candidates:
+        return None
+    if hint:
+        hw, hh = hint
+        candidates.sort(key=lambda wh: abs(wh[0] - hw) + abs(wh[1] - hh))
+    return candidates[0]
+
+
+def determine_dimensions(ps, corners, piece_edge_info, n_pieces):
     print("\nDetermining dimensions by tracing border edges from corners...")
     results = []
     for c in corners:
@@ -135,6 +149,9 @@ def determine_dimensions(ps, corners, piece_edge_info):
         print(f"  Corner {c}: side[{non_flat[0]}]={d1} pcs, side[{non_flat[1]}]={d2} pcs -> {d1}x{d2}")
 
     if not results:
+        inferred = _infer_from_piece_count(n_pieces)
+        if inferred:
+            return inferred
         return None, None
 
     dim_pairs = Counter()
@@ -144,7 +161,19 @@ def determine_dimensions(ps, corners, piece_edge_info):
 
     best_pair, count = dim_pairs.most_common(1)[0]
     w, h = best_pair
-    print(f"\n  Most common dimension pair: {w} x {h} (from {count} observations)")
+    print(f"  Traced dimension pair: {w} x {h} = {w * h} (from {count} observations, {n_pieces} pieces)")
+
+    if w * h == n_pieces:
+        return w, h
+
+    print(f"  WARNING: {w}x{h}={w*h} != {n_pieces} pieces, inferring from piece count")
+    inferred = _infer_from_piece_count(n_pieces, hint=(w, h))
+    if inferred:
+        iw, ih = inferred
+        print(f"  Using inferred: {iw} x {ih} = {iw * ih}")
+        return iw, ih
+
+    print(f"  Cannot factor {n_pieces}, keeping traced {w}x{h}")
     return w, h
 
 
@@ -185,7 +214,7 @@ def main():
     print("\n--- Building NCC-enhanced connectivity ---")
     ps_ncc = build_ncc_ps(ps_raw, ncc_lookup)
 
-    w, h = determine_dimensions(ps_raw, corners, piece_edge_info)
+    w, h = determine_dimensions(ps_ncc, corners, piece_edge_info, n_pieces)
     if w is None or w < 2 or h < 2:
         print("Failed to determine dimensions.")
         return
