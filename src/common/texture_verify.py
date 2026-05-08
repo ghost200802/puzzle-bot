@@ -166,9 +166,9 @@ def _edge_tangent_at(edge_vertices, pos):
     return best_dir
 
 
-def extract_inner_band(color_image, sample_positions, piece_center, binary_mask,
-                       inner_offset=INNER_OFFSET, band_width=BAND_WIDTH,
-                       edge_vertices=None):
+def extract_inner_band(color_image, sample_positions, binary_mask,
+                       normal_side='left', inner_offset=INNER_OFFSET,
+                       band_width=BAND_WIDTH, edge_vertices=None):
     h, w = color_image.shape[:2]
     n = len(sample_positions)
 
@@ -201,11 +201,10 @@ def extract_inner_band(color_image, sample_positions, piece_center, binary_mask,
             continue
         tangent = tangent / tlen
 
-        normal = np.array([-tangent[1], tangent[0]])
-
-        to_center = piece_center - pos
-        if np.dot(normal, to_center) < 0:
-            normal = -normal
+        if normal_side == 'left':
+            normal = np.array([-tangent[1], tangent[0]])
+        else:
+            normal = np.array([tangent[1], -tangent[0]])
 
         colors = []
         for d in range(inner_offset, inner_offset + band_width):
@@ -368,11 +367,12 @@ def verify_match(color_dir, deduped_dir, pid_a, si_a, pid_b, si_b, shift=None):
     )
 
     band_a_colors, band_a_gray = extract_inner_band(
-        color_a, sample_positions_a, side_a['piece_center'], mask_a
+        color_a, sample_positions_a, mask_a,
+        normal_side='left'
     )
     band_b_colors, band_b_gray = extract_inner_band(
-        color_b, corr_bf_original, side_b['piece_center'], mask_b,
-        edge_vertices=verts_b_flipped
+        color_b, corr_bf_original, mask_b,
+        normal_side='right', edge_vertices=verts_b_flipped
     )
 
     n = min(len(band_a_colors), len(band_b_colors))

@@ -1,16 +1,13 @@
 import os
 import sys
-import numpy as np
-
-_here = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_here, '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 
 import importlib
 import common.texture_verify as tv
 importlib.reload(tv)
 from common.texture_verify import verify_match
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'output', 'puzzle_new')
 DEDUPED_PATH = os.path.join(OUTPUT_DIR, '3_vector')
 COLOR_PATH = os.path.join(OUTPUT_DIR, '2_piece_colors')
 
