@@ -272,7 +272,7 @@ def main():
             puzzle_height=h,
             on_milestone=on_milestone,
             ps_fallback=ps_raw,
-            stop_after_border=True
+            stop_after_border=False
         )
         if solution.placed_count > best_count:
             best_solution = solution

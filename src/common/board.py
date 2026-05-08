@@ -371,13 +371,21 @@ def build_from_corner(ps, start_piece_id, edge_length,
         pool = []
 
         if len(placed_neighbor_info) >= 2:
-            candidate_sets = []
+            ncc_sets = []
+            fb_used = False
             for nb_pid, nb_ori, facing_us in placed_neighbor_info:
                 nb_side = (facing_us - nb_ori) % 4
-                pids = {n_pid for n_pid, _, _ in ps[nb_pid][nb_side]}
-                candidate_sets.append(pids)
+                ncc_pids = {n_pid for n_pid, _, _ in ps[nb_pid][nb_side]}
+                if ncc_pids:
+                    ncc_sets.append(ncc_pids)
+                elif ps_fallback is not None:
+                    fb_pids = {n_pid for n_pid, _, _ in ps_fallback[nb_pid][nb_side]}
+                    ncc_sets.append(fb_pids)
+                    fb_used = True
+                else:
+                    ncc_sets.append(set())
 
-            common_pids = set.intersection(*candidate_sets) - board._placed_piece_ids
+            common_pids = set.intersection(*ncc_sets) - board._placed_piece_ids
 
             if not common_pids and ps_fallback is not None:
                 fb_sets = []
@@ -413,8 +421,10 @@ def build_from_corner(ps, start_piece_id, edge_length,
                     continue
                 ok, _ = board.can_place(pid, ps[pid], x, y, orientation)
                 if ok:
-                    combined = _get_combined_cost(board, pid, ps, x, y)
-                    pool.append((combined, pid, orientation))
+                    cost_ps = ps_fallback if fb_used else ps
+                    combined = _get_combined_cost(board, pid, cost_ps, x, y)
+                    penalty = 50.0 if fb_used else 0.0
+                    pool.append((combined + penalty, pid, orientation))
         else:
             index_of_neighbor_in_direction = (direction - start_orientation) % 4
             for neighbor_piece_id, neighbor_side_index, _ in ps[start_piece_id][index_of_neighbor_in_direction]:
