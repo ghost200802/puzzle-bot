@@ -727,7 +727,7 @@ class TargetMatcher:
             if m.sum() < 50:
                 continue
 
-            blend = m.astype(np.float32) / 255.0 * 0.7
+            blend = m.astype(np.float32) * 0.95
             blend3 = np.stack([blend] * 3, axis=2)
 
             region = target_bgr[py1:py2, px1:px2]
