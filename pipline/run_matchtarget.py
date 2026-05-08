@@ -330,61 +330,135 @@ class TargetMatcher:
         y2 = int(self._grid_offset_y + (gy + 1) * self._cell_h)
 
         ah, aw = self._assembly_img.shape[:2]
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(aw, x2), min(ah, y2)
 
-        if x2 <= x1 or y2 <= y1:
+        assembly_cell = self._assembly_img[max(0,y1):min(ah,y2), max(0,x1):min(aw,x2)]
+        if assembly_cell.size == 0:
             return None
 
-        target_cell = self.target_aligned[y1:y2, x1:x2]
-        assembly_cell = self._assembly_img[y1:y2, x1:x2]
-
-        if target_cell.size == 0 or assembly_cell.size == 0:
-            return None
-
-        min_h = min(target_cell.shape[0], assembly_cell.shape[0])
-        min_w = min(target_cell.shape[1], assembly_cell.shape[1])
-        tc = target_cell[:min_h, :min_w]
-        ac = assembly_cell[:min_h, :min_w]
-
-        ac_gray = cv2.cvtColor(ac, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        ac_gray = cv2.cvtColor(assembly_cell, cv2.COLOR_BGR2GRAY).astype(np.float32)
         if ac_gray.std() < 5:
-            return {'score': 0.0, 'ncc_score': 0.0, 'hist_score': 0.0}
+            return {'score': 0.0, 'ncc_score': 0.0, 'hist_score': 0.0,
+                    'dx': 0.0, 'dy': 0.0, 'angle': 0.0}
 
-        ncc = _ncc_score(tc, ac)
-        ncc_score = max(0, ncc)
+        margin_px = int(max(self._cell_w, self._cell_h) * 0.3)
 
-        tc_hsv = cv2.cvtColor(tc, cv2.COLOR_BGR2HSV)
-        ac_hsv = cv2.cvtColor(ac, cv2.COLOR_BGR2HSV)
-        mask = np.ones(tc_hsv.shape[:2], dtype=np.uint8) * 255
-        hist_tc = cv2.calcHist([tc_hsv], [0, 1], mask, [36, 32], [0, 180, 0, 256])
-        hist_ac = cv2.calcHist([ac_hsv], [0, 1], mask, [36, 32], [0, 180, 0, 256])
-        cv2.normalize(hist_tc, hist_tc)
-        cv2.normalize(hist_ac, hist_ac)
-        hist_score = max(0, cv2.compareHist(
-            hist_tc.astype(np.float32), hist_ac.astype(np.float32), cv2.HISTCMP_CORREL
-        ))
+        tx1 = max(0, x1 - margin_px)
+        ty1 = max(0, y1 - margin_px)
+        tx2 = min(aw, x2 + margin_px)
+        ty2 = min(ah, y2 + margin_px)
+        target_region = self.target_aligned[ty1:ty2, tx1:tx2]
+
+        search_scale = 0.5
+        small_cell = cv2.resize(assembly_cell, None, fx=search_scale, fy=search_scale,
+                                interpolation=cv2.INTER_AREA)
+        small_target = cv2.resize(target_region, None, fx=search_scale, fy=search_scale,
+                                  interpolation=cv2.INTER_AREA)
+
+        max_dx = int(margin_px * search_scale)
+        max_dy = int(margin_px * search_scale)
+        angles = np.arange(-5, 5.5, 1.0)
+
+        cell_hs, cell_ws = small_cell.shape[:2]
+        ths, tws = small_target.shape[:2]
+
+        base_y = int((y1 - ty1) * search_scale)
+        base_x = int((x1 - tx1) * search_scale)
+
+        best_score = -999
+        best_params = (0, 0, 0.0)
+
+        for angle in angles:
+            if abs(angle) < 0.01:
+                rotated = small_cell
+            else:
+                M = cv2.getRotationMatrix2D((cell_ws / 2, cell_hs / 2), angle, 1.0)
+                rotated = cv2.warpAffine(small_cell, M, (cell_ws, cell_hs),
+                                         borderMode=cv2.BORDER_CONSTANT, borderValue=(255, 255, 255))
+
+            rh, rw = rotated.shape[:2]
+
+            for dy in range(-max_dy, max_dy + 1, 2):
+                for dx in range(-max_dx, max_dx + 1, 2):
+                    y_s = base_y + dy
+                    x_s = base_x + dx
+                    y_e = y_s + rh
+                    x_e = x_s + rw
+
+                    if y_s < 0 or x_s < 0 or y_e > ths or x_e > tws:
+                        continue
+
+                    region = small_target[y_s:y_e, x_s:x_e]
+                    score = _ncc_score(region, rotated)
+                    if score > best_score:
+                        best_score = score
+                        best_params = (dx / search_scale, dy / search_scale, angle)
+
+        ncc_score = max(0, best_score)
+        dx_final, dy_final, angle_final = best_params
+
+        rx1 = max(0, x1 + int(dx_final))
+        ry1 = max(0, y1 + int(dy_final))
+        rx2 = min(aw, x2 + int(dx_final))
+        ry2 = min(ah, y2 + int(dy_final))
+        target_at_best = self.target_aligned[ry1:ry2, rx1:rx2]
+        assembly_at_best = self._assembly_img[max(0,y1):min(ah,y2), max(0,x1):min(aw,x2)]
+
+        min_h = min(target_at_best.shape[0], assembly_at_best.shape[0])
+        min_w = min(target_at_best.shape[1], assembly_at_best.shape[1])
+        if min_h > 0 and min_w > 0:
+            tc_hsv = cv2.cvtColor(target_at_best[:min_h, :min_w], cv2.COLOR_BGR2HSV)
+            ac_hsv = cv2.cvtColor(assembly_at_best[:min_h, :min_w], cv2.COLOR_BGR2HSV)
+            mask = np.ones(tc_hsv.shape[:2], dtype=np.uint8) * 255
+            hist_tc = cv2.calcHist([tc_hsv], [0, 1], mask, [36, 32], [0, 180, 0, 256])
+            hist_ac = cv2.calcHist([ac_hsv], [0, 1], mask, [36, 32], [0, 180, 0, 256])
+            cv2.normalize(hist_tc, hist_tc)
+            cv2.normalize(hist_ac, hist_ac)
+            hist_score = max(0, float(cv2.compareHist(
+                hist_tc.astype(np.float32), hist_ac.astype(np.float32), cv2.HISTCMP_CORREL
+            )))
+        else:
+            hist_score = 0.0
 
         combined = 0.6 * ncc_score + 0.4 * hist_score
         return {
             'score': combined,
             'ncc_score': ncc_score,
-            'hist_score': float(hist_score),
+            'hist_score': hist_score,
+            'dx': float(dx_final),
+            'dy': float(dy_final),
+            'angle': float(angle_final),
         }
 
     def match_all_pieces(self):
-        print("\n--- Phase 3: Per-Piece Matching ---")
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        print("\n--- Phase 3: Per-Piece Matching (with rotation+translation search) ---")
         results = {}
         pids = sorted(self.placed.keys())
         total = len(pids)
 
-        for idx, pid in enumerate(pids):
-            info = self.placed[pid]
-            result = self._match_single_piece(pid, info)
-            if result is not None:
-                results[pid] = result
-            if (idx + 1) % 10 == 0 or idx == total - 1:
-                print(f"  Matched {idx + 1}/{total} pieces")
+        n_workers = min(8, os.cpu_count() or 4)
+        print(f"  Using {n_workers} threads for {total} pieces")
+
+        with ThreadPoolExecutor(max_workers=n_workers) as executor:
+            futures = {}
+            for pid in pids:
+                info = self.placed[pid]
+                futures[executor.submit(self._match_single_piece, pid, info)] = pid
+
+            done_count = 0
+            for future in as_completed(futures):
+                pid = futures[future]
+                try:
+                    result = future.result()
+                    if result is not None:
+                        results[pid] = result
+                except Exception as e:
+                    print(f"  Error matching piece {pid}: {e}")
+
+                done_count += 1
+                if done_count % 10 == 0 or done_count == total:
+                    print(f"  Matched {done_count}/{total} pieces")
 
         self.match_results = results
 
@@ -419,6 +493,9 @@ class TargetMatcher:
                 'score': round(float(result.get('score', 0)), 4),
                 'ncc_score': round(float(result.get('ncc_score', 0)), 4),
                 'hist_score': round(float(result.get('hist_score', 0)), 4),
+                'dx': round(float(result.get('dx', 0)), 2),
+                'dy': round(float(result.get('dy', 0)), 2),
+                'angle': round(float(result.get('angle', 0)), 2),
                 'confidence': round(float(result.get('confidence', 0)), 4),
                 'refined': bool(result.get('refined', False)),
             }
