@@ -293,6 +293,7 @@ def build_from_corner(ps, start_piece_id, edge_length,
 
     iteration = 0
     longest = 0
+    best_board = None
     while priority_q:
         priority, data = heapq.heappop(priority_q)
         board, start_piece_id, start_orientation, x, y, direction = data
@@ -302,13 +303,15 @@ def build_from_corner(ps, start_piece_id, edge_length,
             print(board)
 
             if (iteration > MAX_ITERATIONS_TO_FIND_BORDER and longest < edge_length) or iteration > MAX_ITERATIONS:
-                raise Exception("Too many iterations, I think we chose the wrong corner")
+                print(f"Gave up after {iteration} iterations, longest: {longest}")
+                break
 
         if board.placed_count == pw * ph:
             print(f"Placed {pw * ph} pieces in {iteration} iterations")
             break
         elif board.placed_count > longest:
             longest = board.placed_count
+            best_board = board
 
         index_of_neighbor_in_direction = (direction - start_orientation) % 4
         iteration += 1
@@ -337,7 +340,10 @@ def build_from_corner(ps, start_piece_id, edge_length,
         print(board)
         return board
     else:
-        raise Exception(f"No solution found after {iteration} iterations, longest found: {longest}")
+        result = best_board if best_board is not None else board
+        print(f"Partial solution: {result.placed_count}/{pw * ph} after {iteration} iterations")
+        print(result)
+        return result
 
 
 def _orient_start_corner_to_top_left(p):

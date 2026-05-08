@@ -1,14 +1,15 @@
 import os
 import sys
 import json
+import math
 from collections import Counter
 
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
 from common.config import DEDUPED_DIR, CONNECTIVITY_DIR, SOLUTION_DIR
-from common import board, output
-from common.board import build_from_corner
+from common import board, output as board_output
+from common.board import build_from_corner, Board
 
 OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
 DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
@@ -16,6 +17,64 @@ CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, CONNECTIVITY_DIR)
 SOLUTION_PATH = os.path.join(OUTPUT_DIR, SOLUTION_DIR)
 
 NCC_PRIORITY_WEIGHT = 1000.0
+
+
+def load_ncc_lookup(report_path):
+    if not os.path.exists(report_path):
+        return {}
+    with open(report_path, 'r') as f:
+        report = json.load(f)
+    lookup = {}
+    for pid_str, sides in report.items():
+        pid = int(pid_str)
+        for si, matches in enumerate(sides):
+            for m in matches:
+                key = (pid, si, m['pid'], m['si'])
+                lookup[key] = {
+                    'ncc': m['ncc'],
+                    'reject': m.get('reject', False),
+                }
+    return lookup
+
+
+def load_connectivity_raw(connectivity_file):
+    with open(connectivity_file, 'r') as f:
+        connectivity = json.load(f)
+    ps = {}
+    for pid_str, fits_list in connectivity.items():
+        pid = int(pid_str)
+        ps[pid] = [[], [], [], []]
+        for i in range(4):
+            for m in fits_list[i]:
+                ps[pid][i].append((m['pid'], m['si'], m['error']))
+    return ps
+
+
+def build_ncc_ps(ps_raw, ncc_lookup):
+    ps = {}
+    ncc_count = 0
+    fb_count = 0
+    for pid, sides in ps_raw.items():
+        ps[pid] = [[], [], [], []]
+        for si in range(4):
+            ncc_list = []
+            fb_list = []
+            for other_pid, other_si, error in sides[si]:
+                key = (pid, si, other_pid, other_si)
+                rev_key = (other_pid, other_si, pid, si)
+                info = ncc_lookup.get(key) or ncc_lookup.get(rev_key)
+                if info and not info['reject'] and info['ncc'] > 0:
+                    composite = error / (info['ncc'] * NCC_PRIORITY_WEIGHT)
+                    ncc_list.append((other_pid, other_si, composite))
+                    ncc_count += 1
+                else:
+                    fb_list.append((other_pid, other_si, error))
+                    fb_count += 1
+            ncc_list.sort(key=lambda x: x[2])
+            fb_list.sort(key=lambda x: x[2])
+            ps[pid][si] = ncc_list + fb_list
+    print(f"  NCC composite: {ncc_count}, Fallback: {fb_count}")
+    return ps
 
 
 def trace_border_edge(start_pid, start_out_side, ps, piece_edge_info):
@@ -32,7 +91,7 @@ def trace_border_edge(start_pid, start_out_side, ps, piece_edge_info):
         for other_pid, other_side, error in side_fits:
             if other_pid in visited:
                 continue
-            nf = piece_edge_info.get(other_pid, [False]*4)
+            nf = piece_edge_info.get(other_pid, [False] * 4)
             ec = sum(1 for f in nf if f)
             if ec >= 1:
                 edge_candidates.append((other_pid, other_side, error, ec))
@@ -44,7 +103,7 @@ def trace_border_edge(start_pid, start_out_side, ps, piece_edge_info):
         count += 1
         if ec >= 2:
             break
-        nf = piece_edge_info.get(next_pid, [False]*4)
+        nf = piece_edge_info.get(next_pid, [False] * 4)
         out_side = None
         for i in range(4):
             if i == in_side:
@@ -64,7 +123,7 @@ def determine_dimensions(ps, corners, piece_edge_info):
     print("\nDetermining dimensions by tracing border edges from corners...")
     results = []
     for c in corners:
-        ef = piece_edge_info.get(c, [False]*4)
+        ef = piece_edge_info.get(c, [False] * 4)
         flat = [i for i, f in enumerate(ef) if f]
         non_flat = [i for i in range(4) if i not in flat]
         if len(non_flat) != 2:
@@ -88,242 +147,172 @@ def determine_dimensions(ps, corners, piece_edge_info):
     return w, h
 
 
-def load_connectivity_raw(connectivity_file):
-    with open(connectivity_file, 'r') as f:
-        connectivity = json.load(f)
+def generate_assembly_png(solution, piece_edge_info, output_path):
+    from PIL import Image, ImageDraw, ImageFont
 
-    ps = {}
-    for pid_str, fits_list in connectivity.items():
-        pid = int(pid_str)
-        ps[pid] = [[], [], [], []]
-        for i in range(4):
-            for m in fits_list[i]:
-                ps[pid][i].append((m['pid'], m['si'], m['error']))
+    cell_size = 80
+    margin = 40
+    w, h = solution.width, solution.height
+    img_w = margin * 2 + w * cell_size
+    img_h = margin * 2 + h * cell_size + 60
 
-    return ps
+    img = Image.new('RGB', (img_w, img_h), (255, 255, 255))
+    draw = ImageDraw.Draw(img)
 
+    try:
+        font = ImageFont.truetype("arial.ttf", 16)
+        title_font = ImageFont.truetype("arial.ttf", 22)
+        small_font = ImageFont.truetype("arial.ttf", 12)
+    except Exception:
+        font = ImageFont.load_default()
+        title_font = font
+        small_font = font
 
-def load_ncc_report(report_path):
-    if not os.path.exists(report_path):
-        return None
+    arrow = '^>v<'
+    title = f"Assembly ({solution.placed_count}/{w * h} pieces)"
+    draw.text((margin, 10), title, fill=(0, 0, 0), font=title_font)
 
-    with open(report_path, 'r') as f:
-        report = json.load(f)
+    legend_y = 35
+    draw.rectangle([margin, legend_y, margin + 15, legend_y + 12], fill=(255, 80, 80), outline=(200, 0, 0))
+    draw.text((margin + 20, legend_y - 2), "Corner", fill=(0, 0, 0), font=small_font)
+    draw.rectangle([margin + 80, legend_y, margin + 95, legend_y + 12], fill=(80, 130, 255), outline=(0, 60, 200))
+    draw.text((margin + 100, legend_y - 2), "Edge", fill=(0, 0, 0), font=small_font)
+    draw.rectangle([margin + 150, legend_y, margin + 165, legend_y + 12], fill=(80, 200, 80), outline=(0, 140, 0))
+    draw.text((margin + 170, legend_y - 2), "Inner", fill=(0, 0, 0), font=small_font)
 
-    ncc_lookup = {}
-    for pid_str, sides in report.items():
-        pid = int(pid_str)
-        for si, matches in enumerate(sides):
-            for m in matches:
-                if m.get('reject', False):
-                    continue
-                key = (pid, si, m['pid'], m['si'])
-                ncc_lookup[key] = m['ncc']
+    y_off = margin + 25
+    for row in range(h):
+        for col in range(w):
+            x1 = margin + col * cell_size
+            y1 = y_off + row * cell_size
+            x2 = x1 + cell_size
+            y2 = y1 + cell_size
 
-    return ncc_lookup
-
-
-def build_phase1_connectivity(ps_raw, ncc_lookup):
-    print("\n  Phase 1: Building NCC-priority connectivity (only NCC-verified pairs)...")
-    ps = {}
-    kept_count = 0
-    dropped_count = 0
-
-    for pid, sides in ps_raw.items():
-        ps[pid] = [[], [], [], []]
-        for si in range(4):
-            for other_pid, other_si, error in sides[si]:
-                ncc_key = (pid, si, other_pid, other_si)
-                rev_key = (other_pid, other_si, pid, si)
-                ncc = ncc_lookup.get(ncc_key) or ncc_lookup.get(rev_key)
-                if ncc is not None and ncc > 0:
-                    composite = error / (ncc * NCC_PRIORITY_WEIGHT)
-                    ps[pid][si].append((other_pid, other_si, composite))
-                    kept_count += 1
-                else:
-                    dropped_count += 1
-
-    print(f"    Kept {kept_count} NCC-verified pairs, dropped {dropped_count} unverified")
-    return ps
-
-
-def build_phase2_connectivity(ps_raw, ncc_lookup):
-    print("\n  Phase 2: Building NCC-enhanced connectivity (all pairs, NCC composite score)...")
-    ps = {}
-    ncc_count = 0
-    fallback_count = 0
-
-    for pid, sides in ps_raw.items():
-        ps[pid] = [[], [], [], []]
-        for si in range(4):
-            for other_pid, other_si, error in sides[si]:
-                ncc_key = (pid, si, other_pid, other_si)
-                rev_key = (other_pid, other_si, pid, si)
-                ncc = ncc_lookup.get(ncc_key) or ncc_lookup.get(rev_key)
-                if ncc is not None and ncc > 0:
-                    composite = error / (ncc * NCC_PRIORITY_WEIGHT)
-                    ps[pid][si].append((other_pid, other_si, composite))
-                    ncc_count += 1
-                else:
-                    ps[pid][si].append((other_pid, other_si, error))
-                    fallback_count += 1
-
-    print(f"    {ncc_count} pairs with NCC composite, {fallback_count} pairs with original error")
-    return ps
-
-
-def try_solve_from_corners(ps, corners, pw, ph, edge_length, phase_name):
-    corners_sorted = sorted(
-        corners,
-        key=lambda c: sum(len(fits) for fits in ps[c]),
-        reverse=True
-    )
-
-    for i, corner_id in enumerate(corners_sorted):
-        print(f"\n  [{phase_name}] Trying corner {i}: piece {corner_id}...")
-        try:
-            solution = build_from_corner(
-                ps, start_piece_id=corner_id,
-                edge_length=edge_length,
-                puzzle_width=pw, puzzle_height=ph
-            )
-            if solution.placed_count == pw * ph:
-                print(f"  [{phase_name}] SUCCESS with corner {corner_id}!")
-                return solution
+            cell = solution.get(col, row)
+            if cell is None:
+                draw.rectangle([x1, y1, x2, y2], outline=(220, 220, 220), width=1)
+                draw.text((x1 + cell_size // 2, y1 + cell_size // 2), "-",
+                          fill=(200, 200, 200), font=small_font, anchor="mm")
             else:
-                print(f"  [{phase_name}] Corner {corner_id}: placed {solution.placed_count}/{pw * ph}")
-        except Exception as e:
-            print(f"  [{phase_name}] Corner {corner_id} failed: {e}")
-            continue
+                pid, fits, ori = cell
+                ef = piece_edge_info.get(pid, [False] * 4)
+                flat_count = sum(1 for f in ef if f)
+                if flat_count >= 2:
+                    fill = (255, 200, 200)
+                    outline = (200, 0, 0)
+                elif flat_count >= 1:
+                    fill = (200, 210, 255)
+                    outline = (0, 60, 200)
+                else:
+                    fill = (200, 255, 200)
+                    outline = (0, 140, 0)
+                draw.rectangle([x1, y1, x2, y2], fill=fill, outline=outline, width=2)
+                label = f"{pid}{arrow[ori]}"
+                draw.text((x1 + cell_size // 2, y1 + cell_size // 2), label,
+                          fill=(0, 0, 0), font=font, anchor="mm")
 
-    return None
+    img.save(output_path)
+    print(f"PNG saved: {output_path}")
 
 
 def main():
     print("=" * 60)
-    print("Puzzle Solving Pipeline (NCC Priority)")
-    print(f"Connectivity: {CONNECTIVITY_PATH}")
-    print(f"Piece data:   {DEDUPED_PATH}")
-    print(f"Output:       {SOLUTION_PATH}")
+    print("Puzzle Solve (NCC Priority + Spiral Assembly)")
     print("=" * 60)
 
     connectivity_file = os.path.join(CONNECTIVITY_PATH, 'connectivity.json')
     edge_info_file = os.path.join(CONNECTIVITY_PATH, 'piece_edge_info.json')
     ncc_report_file = os.path.join(CONNECTIVITY_PATH, 'texture_verify_report.json')
 
-    if not os.path.exists(connectivity_file):
-        print(f"Error: connectivity.json not found: {connectivity_file}")
-        print(f"Run run_connect.py first to build the connectivity graph.")
-        return
+    with open(connectivity_file, 'r') as f:
+        connectivity_raw = json.load(f)
+    with open(edge_info_file, 'r') as f:
+        piece_edge_info = {int(k): v for k, v in json.load(f).items()}
+
+    ncc_lookup = load_ncc_lookup(ncc_report_file)
+    print(f"NCC lookup: {len(ncc_lookup)} entries")
 
     ps_raw = load_connectivity_raw(connectivity_file)
-
-    piece_edge_info = None
-    if os.path.exists(edge_info_file):
-        with open(edge_info_file, 'r') as f:
-            raw = json.load(f)
-        piece_edge_info = {int(k): v for k, v in raw.items()}
-    else:
-        print("Warning: piece_edge_info.json not found, will infer from connectivity")
-
-    ncc_lookup = load_ncc_report(ncc_report_file)
-    has_ncc = ncc_lookup is not None and len(ncc_lookup) > 0
-    if has_ncc:
-        print(f"Loaded NCC report: {len(ncc_lookup)} verified pairs")
-    else:
-        print("No NCC report found, will use original connectivity only")
-
     n_pieces = len(ps_raw)
 
     corners = []
-    edges = []
     for pid in ps_raw:
-        if piece_edge_info and pid in piece_edge_info:
+        if pid in piece_edge_info:
             edge_count = sum(1 for f in piece_edge_info[pid] if f)
         else:
             edge_count = sum(1 for f in ps_raw[pid] if len(f) == 0)
-        if edge_count > 0:
-            edges.append(pid)
-            if edge_count >= 2:
-                corners.append(pid)
+        if edge_count >= 2:
+            corners.append(pid)
 
-    print(f"\nPieces: {n_pieces}")
-    print(f"Corners: {len(corners)} -> {corners}")
-    print(f"Edge pieces (incl corners): {len(edges)}")
+    print(f"Pieces: {n_pieces}")
+    print(f"Corners: {corners}")
 
     os.makedirs(SOLUTION_PATH, exist_ok=True)
 
-    w, h = determine_dimensions(ps_raw, corners, piece_edge_info)
+    print("\n--- Building NCC-enhanced connectivity ---")
+    ps_ncc = build_ncc_ps(ps_raw, ncc_lookup)
 
+    w, h = determine_dimensions(ps_raw, corners, piece_edge_info)
     if w is None or w < 2 or h < 2:
         print("Failed to determine dimensions.")
         return
 
     edge_length = 2 * (w + h) - 4
 
+    import common.board as board_mod
+    board_mod.MAX_ITERATIONS_TO_FIND_BORDER = 50000
+    board_mod.MAX_ITERATIONS = 300000000
+    print(f"MAX_ITERATIONS_TO_FIND_BORDER: {board_mod.MAX_ITERATIONS_TO_FIND_BORDER}")
+
     print(f"\n{'=' * 60}")
-    print(f"Solving with traced dimensions {w} x {h} (NCC priority)")
+    print(f"Solving {w}x{h} ({w * h} pieces, {n_pieces} available)")
     print(f"{'=' * 60}")
 
-    solution = None
+    corners_sorted = sorted(
+        corners,
+        key=lambda c: sum(len(fits) for fits in ps_ncc[c]),
+        reverse=True
+    )
 
-    if has_ncc:
-        # Phase 1: Only NCC-verified pairs, sorted by NCC composite score
-        print(f"\n{'=' * 40}")
-        print(f"Phase 1: NCC-only connectivity")
-        print(f"{'=' * 40}")
-        ps_phase1 = build_phase1_connectivity(ps_raw, ncc_lookup)
-        solution = try_solve_from_corners(ps_phase1, corners, w, h, edge_length, "Phase1-NCC")
+    best_solution = None
+    best_count = 0
 
-        if solution is None:
-            # Phase 2: All pairs, NCC-enhanced scoring
-            print(f"\n{'=' * 40}")
-            print(f"Phase 2: NCC-enhanced connectivity (with fallback)")
-            print(f"{'=' * 40}")
-            ps_phase2 = build_phase2_connectivity(ps_raw, ncc_lookup)
-            solution = try_solve_from_corners(ps_phase2, corners, w, h, edge_length, "Phase2-Enhanced")
+    for i, corner_id in enumerate(corners_sorted):
+        print(f"\n  Trying corner {i}: piece {corner_id}...")
+        solution = build_from_corner(
+            ps_ncc, start_piece_id=corner_id,
+            edge_length=edge_length,
+            puzzle_width=pw if (pw := w) else None,
+            puzzle_height=h
+        )
+        if solution.placed_count > best_count:
+            best_solution = solution
+            best_count = solution.placed_count
+        if solution.placed_count == w * h:
+            break
 
-    if solution is None:
-        # Phase 3 (or Phase 1 if no NCC): Original connectivity
-        print(f"\n{'=' * 40}")
-        print(f"{'Phase 3' if has_ncc else 'Phase 1'}: Original connectivity")
-        print(f"{'=' * 40}")
-        solution = try_solve_from_corners(ps_raw, corners, w, h, edge_length, "Original")
-
-    if solution is None:
-        print("\nFailed to solve the puzzle.")
+    if best_solution is None:
+        print("\nNo solution at all.")
         return
 
+    is_full = best_solution.placed_count == w * h
     print(f"\n{'=' * 60}")
-    print(f"Solution: Board {w} x {h}")
-    print(f"Pieces placed: {solution.placed_count}/{w * h}")
+    print(f"{'FULL SOLUTION' if is_full else 'PARTIAL SOLUTION'}: "
+          f"{best_solution.placed_count}/{w * h}")
     print(f"{'=' * 60}")
+    print(best_solution)
 
-    output.print_solution_summary(solution)
-    output.generate_solution_grid(solution, SOLUTION_PATH)
-    output.generate_solution_svg(solution, DEDUPED_PATH, SOLUTION_PATH)
-    output.generate_assembly_guide(solution, SOLUTION_PATH)
+    print("\n--- Generating outputs ---")
+    board_output.generate_solution_grid(best_solution, SOLUTION_PATH)
+    board_output.generate_solution_svg(best_solution, DEDUPED_PATH, SOLUTION_PATH)
+    generate_assembly_png(best_solution, piece_edge_info,
+                          os.path.join(SOLUTION_PATH, 'assembly.png'))
 
-    eval_result = board.evaluate_solution(solution)
+    eval_result = board.evaluate_solution(best_solution)
     print(f"\nSolution evaluation:")
     print(f"  Coverage: {eval_result['coverage']:.1%}")
     print(f"  Matched edges: {eval_result['matched_edges']}/{eval_result['total_possible_edges']}")
     print(f"  Match quality: {eval_result['match_quality']:.1%}")
-
-    eval_path = os.path.join(SOLUTION_PATH, 'evaluation.json')
-    with open(eval_path, 'w') as f:
-        json.dump(eval_result, f, indent=2)
-    print(f"  Saved to {eval_path}")
-
-    solution_data = {
-        'width': w,
-        'height': h,
-        'placed_count': solution.placed_count,
-        'total': w * h,
-    }
-    sol_meta_path = os.path.join(SOLUTION_PATH, 'solution_meta.json')
-    with open(sol_meta_path, 'w') as f:
-        json.dump(solution_data, f, indent=2)
 
     print(f"\nAll outputs saved to {SOLUTION_PATH}/")
 
