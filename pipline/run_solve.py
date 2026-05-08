@@ -236,6 +236,25 @@ def main():
         reverse=True
     )
 
+    def on_milestone(b, tag, it, elapsed):
+        tag_name = f"milestone_{tag}"
+        ms_dir = os.path.join(SOLUTION_PATH, tag_name)
+        os.makedirs(ms_dir, exist_ok=True)
+        print(f"    -> saving milestone '{tag}' to {ms_dir}")
+        try:
+            board_output.generate_solution_grid(b, ms_dir)
+        except Exception as e:
+            print(f"    grid failed: {e}")
+        try:
+            board_output.generate_solution_svg(b, DEDUPED_PATH, ms_dir)
+        except Exception as e:
+            print(f"    svg failed: {e}")
+        try:
+            generate_assembly_png(b, DEDUPED_PATH, OUTPUT_DIR,
+                                  os.path.join(ms_dir, 'assembly.png'))
+        except Exception as e:
+            print(f"    assembly failed: {e}")
+
     best_solution = None
     best_count = 0
 
@@ -245,7 +264,8 @@ def main():
             ps_ncc, start_piece_id=corner_id,
             edge_length=edge_length,
             puzzle_width=pw if (pw := w) else None,
-            puzzle_height=h
+            puzzle_height=h,
+            on_milestone=on_milestone
         )
         if solution.placed_count > best_count:
             best_solution = solution

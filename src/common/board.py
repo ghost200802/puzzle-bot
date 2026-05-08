@@ -1,4 +1,5 @@
 import os
+import time
 import heapq
 
 from common.config import *
@@ -271,10 +272,11 @@ def build(connectivity=None, input_path=None, output_path=None,
     return solution
 
 def build_from_corner(ps, start_piece_id, edge_length,
-                      puzzle_width=None, puzzle_height=None):
-    # Allow overriding puzzle dimensions (for phone mode)
+                      puzzle_width=None, puzzle_height=None,
+                      on_milestone=None):
     pw = puzzle_width or PUZZLE_WIDTH
     ph = puzzle_height or PUZZLE_HEIGHT
+    total = pw * ph
 
     print(f"\n===============================\nBuilding from corner {start_piece_id}...")
     start_piece_fits = ps[start_piece_id]
@@ -294,24 +296,45 @@ def build_from_corner(ps, start_piece_id, edge_length,
     iteration = 0
     longest = 0
     best_board = None
+    t_start = time.time()
+    last_report = time.time()
+    border_done = False
+    last_milestone_pct = 0
+
     while priority_q:
         priority, data = heapq.heappop(priority_q)
         board, start_piece_id, start_orientation, x, y, direction = data
-        if iteration % 100 == 0:
-            print("\n" * 40)
-            print(f"Iteration {iteration} with length {board.placed_count}, cost {priority}, longest: {longest}")
-            print(board)
+
+        if iteration % 1000 == 0:
+            now = time.time()
+            elapsed = now - t_start
+            print(f"  iter {iteration:>8d} | cur {board.placed_count:>3d} | best {longest:>3d}/{total} | cost {priority:.4f} | {elapsed:.1f}s")
+            last_report = now
 
             if (iteration > MAX_ITERATIONS_TO_FIND_BORDER and longest < edge_length) or iteration > MAX_ITERATIONS:
                 print(f"Gave up after {iteration} iterations, longest: {longest}")
                 break
 
-        if board.placed_count == pw * ph:
-            print(f"Placed {pw * ph} pieces in {iteration} iterations")
+        if board.placed_count == total:
+            print(f"Placed {total} pieces in {iteration} iterations ({time.time() - t_start:.1f}s)")
             break
         elif board.placed_count > longest:
             longest = board.placed_count
             best_board = board
+
+            if not border_done and longest >= edge_length:
+                border_done = True
+                print(f"  *** Border complete: {longest} pieces at iter {iteration} ***")
+                if on_milestone:
+                    on_milestone(best_board, "border", iteration, time.time() - t_start)
+
+            pct = int(longest * 100 / total)
+            threshold = (pct // 20) * 20
+            if threshold > last_milestone_pct and threshold > 0:
+                last_milestone_pct = threshold
+                print(f"  *** Milestone {threshold}%: {longest}/{total} at iter {iteration} ***")
+                if on_milestone:
+                    on_milestone(best_board, f"pct{threshold}", iteration, time.time() - t_start)
 
         index_of_neighbor_in_direction = (direction - start_orientation) % 4
         iteration += 1
@@ -327,7 +350,6 @@ def build_from_corner(ps, start_piece_id, edge_length,
                 next_y = y + (1 if next_direction == BOTTOM else -1 if next_direction == TOP else 0)
 
                 if not next_board.is_available(next_x, next_y):
-                    # if we can't go further in this direction, time to turn
                     next_direction = (direction + 1) % 4
                     next_x = x + (1 if next_direction == RIGHT else -1 if next_direction == LEFT else 0)
                     next_y = y + (1 if next_direction == BOTTOM else -1 if next_direction == TOP else 0)
@@ -335,14 +357,12 @@ def build_from_corner(ps, start_piece_id, edge_length,
                 data = [next_board, neighbor_piece_id, neighbor_orientation, next_x, next_y, next_direction]
                 heapq.heappush(priority_q, (error, data))
 
-    if board.placed_count == pw * ph:
+    if board.placed_count == total:
         print(f"Found solution after {iteration} iterations!")
-        print(board)
         return board
     else:
         result = best_board if best_board is not None else board
-        print(f"Partial solution: {result.placed_count}/{pw * ph} after {iteration} iterations")
-        print(result)
+        print(f"Partial solution: {result.placed_count}/{total} after {iteration} iterations ({time.time() - t_start:.1f}s)")
         return result
 
 
