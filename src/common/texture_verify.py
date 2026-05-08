@@ -7,6 +7,7 @@ import cv2
 INNER_OFFSET = 6
 BAND_WIDTH = 15
 N_SAMPLES = 30
+SAMPLE_RADIUS = 2
 
 GRADIENT_SIGNIFICANCE_THRESHOLD = 8
 TEXTURE_LOW_THRESHOLD = 0.1
@@ -101,9 +102,16 @@ def extract_inner_band(color_image, side_vertices, piece_center, binary_mask,
         colors = []
         for d in range(inner_offset, inner_offset + band_width):
             pt = resampled[i] + normal * d
-            px, py = int(round(pt[0])), int(round(pt[1]))
-            if 0 <= py < h and 0 <= px < w and binary_mask[py, px] > 0:
-                colors.append(color_image[py, px].astype(np.float64))
+            px_c, py_c = int(round(pt[0])), int(round(pt[1]))
+            patch_pixels = []
+            for dy in range(-SAMPLE_RADIUS, SAMPLE_RADIUS + 1):
+                for dx in range(-SAMPLE_RADIUS, SAMPLE_RADIUS + 1):
+                    py = py_c + dy
+                    px = px_c + dx
+                    if 0 <= py < h and 0 <= px < w and binary_mask[py, px] > 0:
+                        patch_pixels.append(color_image[py, px].astype(np.float64))
+            if patch_pixels:
+                colors.append(np.mean(patch_pixels, axis=0))
 
         if colors:
             avg_color = np.mean(colors, axis=0)

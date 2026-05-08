@@ -1,6 +1,5 @@
 import json
 import numpy as np
-import sys
 
 REPORT_PATH = '../output/puzzle_new/5_connectivity/texture_verify_report.json'
 with open(REPORT_PATH) as f:
@@ -23,103 +22,83 @@ for pid, sides in data.items():
             best = min(valid, key=lambda x: x['error'])
             best_matches[(pid, si)] = best
 
-print(f"Best matches (unique piece-sides): {len(best_matches)}")
-
 best_recs = list(best_matches.values())
-best_pids = set((pid, si) for pid, si in best_matches.keys())
-
-non_best = []
-for r in records:
-    non_best.append(r)
+print(f"Best matches (likely true): {len(best_recs)}")
 
 print("\n" + "="*70)
-print("COMPARISON: Best match (likely true) vs All matches")
+print("NCC distribution: Best match (true) vs All matches")
 print("="*70)
 
-for label, recs in [("Best (n={})".format(len(best_recs)), best_recs), 
+for label, recs in [("Best (n={})".format(len(best_recs)), best_recs),
                      ("All  (n={})".format(len(records)), records)]:
+    ncc = np.array([m['ncc'] for m in recs])
     cd = np.array([m['color_diff'] for m in recs])
-    gs_vals = [m['grad_score'] for m in recs if m['grad_score'] is not None]
-    gs = np.array(gs_vals)
-    err = np.array([m['error'] for m in recs])
-    
     print(f"\n--- {label} ---")
-    print(f"  color_diff: mean={np.mean(cd):.1f} P5={np.percentile(cd,5):.1f} P10={np.percentile(cd,10):.1f} P25={np.percentile(cd,25):.1f} P50={np.percentile(cd,50):.1f} P75={np.percentile(cd,75):.1f} P90={np.percentile(cd,90):.1f} P95={np.percentile(cd,95):.1f}")
-    print(f"  grad_score: mean={np.mean(gs):.3f} P5={np.percentile(gs,5):.3f} P10={np.percentile(gs,10):.3f} P25={np.percentile(gs,25):.3f} P50={np.percentile(gs,50):.3f} P75={np.percentile(gs,75):.3f} P90={np.percentile(gs,90):.3f} P95={np.percentile(gs,95):.3f}")
-    print(f"  error:      mean={np.mean(err):.0f} P5={np.percentile(err,5):.0f} P50={np.percentile(err,50):.0f} P95={np.percentile(err,95):.0f}")
+    print(f"  NCC:        mean={np.mean(ncc):.3f} P5={np.percentile(ncc,5):.3f} P10={np.percentile(ncc,10):.3f} P25={np.percentile(ncc,25):.3f} P50={np.percentile(ncc,50):.3f} P75={np.percentile(ncc,75):.3f} P90={np.percentile(ncc,90):.3f} P95={np.percentile(ncc,95):.3f}")
+    print(f"  color_diff: mean={np.mean(cd):.1f} P50={np.percentile(cd,50):.1f}")
 
 print("\n" + "="*70)
-print("color_diff histogram (Best vs All)")
+print("NCC histogram (Best vs All)")
 print("="*70)
-bins = [0, 20, 30, 40, 50, 60, 70, 80, 90, 100, 120, 140, 160, 180, 200, 250]
+ncc_bins = [-1.0, -0.5, -0.2, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 for label, recs in [("Best", best_recs), ("All ", records)]:
-    cd = np.array([m['color_diff'] for m in recs])
-    hist, _ = np.histogram(cd, bins=bins)
-    total = len(cd)
-    line = f"{label}: "
+    ncc = np.array([m['ncc'] for m in recs])
+    hist, _ = np.histogram(ncc, bins=ncc_bins)
+    total = len(ncc)
+    line = f"{label} (n={total}):"
     for i in range(len(hist)):
         pct = hist[i] / total * 100
         bar = "#" * int(pct)
-        line += f"\n  [{bins[i]:3d}-{bins[i+1]:3d}): {hist[i]:5d} ({pct:5.1f}%) {bar}"
+        line += f"\n  [{ncc_bins[i]:5.1f},{ncc_bins[i+1]:5.1f}): {hist[i]:5d} ({pct:5.1f}%) {bar}"
     print(line)
 
 print("\n" + "="*70)
-print("grad_score histogram (Best vs All, rich texture only)")
+print("Best matches sorted by NCC (bottom 20 = lowest NCC)")
 print("="*70)
-gs_bins = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-for label, recs in [("Best", best_recs), ("All ", records)]:
-    gs_vals = [m['grad_score'] for m in recs if m['grad_score'] is not None]
-    gs = np.array(gs_vals)
-    hist, _ = np.histogram(gs, bins=gs_bins)
-    total = len(gs)
-    line = f"{label} (n={total}): "
-    for i in range(len(hist)):
-        pct = hist[i] / total * 100
-        bar = "#" * int(pct)
-        line += f"\n  [{gs_bins[i]:.1f}-{gs_bins[i+1]:.1f}): {hist[i]:5d} ({pct:5.1f}%) {bar}"
-    print(line)
+for m in sorted(best_recs, key=lambda x: x['ncc'])[:20]:
+    gs_str = f"{m['grad_score']:.3f}" if m['grad_score'] is not None else "N/A"
+    print(f"  ncc={m['ncc']:6.3f}  cd={m['color_diff']:6.1f}  gs={gs_str:>6}  err={m['error']:5.0f}  tex={m['texture_level']}")
+
+print("\n... and top 20 (highest NCC):")
+for m in sorted(best_recs, key=lambda x: x['ncc'])[-20:]:
+    gs_str = f"{m['grad_score']:.3f}" if m['grad_score'] is not None else "N/A"
+    print(f"  ncc={m['ncc']:6.3f}  cd={m['color_diff']:6.1f}  gs={gs_str:>6}  err={m['error']:5.0f}  tex={m['texture_level']}")
 
 print("\n" + "="*70)
-print("2D distribution: color_diff vs error (for best matches)")
+print("NCC-only rejection simulation")
 print("="*70)
-for m in sorted(best_recs, key=lambda x: x['color_diff'])[:20]:
-    print(f"  cd={m['color_diff']:6.1f}  gs={m['grad_score'] if m['grad_score'] is not None else 'N/A':>6}  err={m['error']:5.0f}  tex={m['texture_level']}")
-
-print("\n... and bottom 20 (highest color_diff):")
-for m in sorted(best_recs, key=lambda x: x['color_diff'])[-20:]:
-    print(f"  cd={m['color_diff']:6.1f}  gs={m['grad_score'] if m['grad_score'] is not None else 'N/A':>6}  err={m['error']:5.0f}  tex={m['texture_level']}")
-
-print("\n" + "="*70)
-print("color_diff-only rejection simulation (NO grad_score gate)")
-print("="*70)
-for cd_thresh in [30, 35, 40, 45, 50, 55, 60, 70, 80, 90, 100]:
-    rej_all = sum(1 for m in records if m['color_diff'] > cd_thresh)
-    rej_best = sum(1 for m in best_recs if m['color_diff'] > cd_thresh)
-    print(f"  cd>{cd_thresh:3d}: reject {rej_all:5d}/{len(records)} ({rej_all/len(records)*100:.1f}%)  "
-          f"best_rejected={rej_best}/{len(best_recs)} ({rej_best/len(best_recs)*100:.1f}%)")
+for ncc_thresh in [0.0, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5]:
+    rej_all = sum(1 for m in records if m['ncc'] < ncc_thresh)
+    rej_best = sum(1 for m in best_recs if m['ncc'] < ncc_thresh)
+    print(f"  ncc<{ncc_thresh:.2f}: reject {rej_all:5d}/{len(records)} ({rej_all/len(records)*100:.1f}%)  "
+          f"best_rej={rej_best}/{len(best_recs)} ({rej_best/len(best_recs)*100:.1f}%)")
 
 print("\n" + "="*70)
-print("Combined: color_diff OR grad_score rejection")
+print("Combined: NCC AND color_diff rejection")
 print("="*70)
-for cd_thresh in [40, 50, 60, 70, 80]:
-    for gs_thresh in [0.3, 0.35, 0.4, 0.45]:
-        rej_all = 0
-        rej_best = 0
-        for m in records:
-            reject = False
-            if m['color_diff'] > cd_thresh:
-                reject = True
-            if m['grad_score'] is not None and m['grad_score'] < gs_thresh:
-                reject = True
-            if reject:
-                rej_all += 1
-        for m in best_recs:
-            reject = False
-            if m['color_diff'] > cd_thresh:
-                reject = True
-            if m['grad_score'] is not None and m['grad_score'] < gs_thresh:
-                reject = True
-            if reject:
-                rej_best += 1
-        print(f"  cd>{cd_thresh} OR gs<{gs_thresh}: reject {rej_all:5d}/{len(records)} ({rej_all/len(records)*100:.1f}%)  "
+for ncc_thresh in [0.2, 0.25, 0.3, 0.35, 0.4]:
+    for cd_thresh in [50, 60, 70, 80, 90]:
+        rej_all = sum(1 for m in records if m['ncc'] < ncc_thresh and m['color_diff'] > cd_thresh)
+        rej_best = sum(1 for m in best_recs if m['ncc'] < ncc_thresh and m['color_diff'] > cd_thresh)
+        print(f"  ncc<{ncc_thresh} AND cd>{cd_thresh}: reject {rej_all:5d}/{len(records)} ({rej_all/len(records)*100:.1f}%)  "
               f"best_rej={rej_best}/{len(best_recs)} ({rej_best/len(best_recs)*100:.1f}%)")
+
+print("\n" + "="*70)
+print("Combined: NCC OR color_diff rejection")
+print("="*70)
+for ncc_thresh in [0.1, 0.15, 0.2, 0.25, 0.3]:
+    for cd_thresh in [80, 100, 120, 140]:
+        rej_all = sum(1 for m in records if m['ncc'] < ncc_thresh or m['color_diff'] > cd_thresh)
+        rej_best = sum(1 for m in best_recs if m['ncc'] < ncc_thresh or m['color_diff'] > cd_thresh)
+        print(f"  ncc<{ncc_thresh} OR cd>{cd_thresh}: reject {rej_all:5d}/{len(records)} ({rej_all/len(records)*100:.1f}%)  "
+              f"best_rej={rej_best}/{len(best_recs)} ({rej_best/len(best_recs)*100:.1f}%)")
+
+print("\n" + "="*70)
+print("Cross-tab: error range vs NCC")
+print("="*70)
+for err_thresh in [500, 800, 1000, 1200, 1500]:
+    subset = [m for m in records if m['error'] <= err_thresh]
+    if not subset:
+        continue
+    nccs = np.array([m['ncc'] for m in subset])
+    print(f"  error<={err_thresh} (n={len(subset)}): NCC mean={np.mean(nccs):.3f} P50={np.median(nccs):.3f} P10={np.percentile(nccs,10):.3f} P90={np.percentile(nccs,90):.3f}")
