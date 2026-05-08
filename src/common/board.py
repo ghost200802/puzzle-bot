@@ -271,6 +271,24 @@ def build(connectivity=None, input_path=None, output_path=None,
         raise Exception("Failed to solve")
     return solution
 
+def _get_combined_cost(board, candidate_pid, ps, x, y):
+    costs = []
+    for dx, dy, facing_us in [(-1, 0, RIGHT), (1, 0, LEFT), (0, -1, BOTTOM), (0, 1, TOP)]:
+        nx, ny = x + dx, y + dy
+        neighbor = board.get(nx, ny)
+        if neighbor is None:
+            continue
+        neighbor_pid, _, neighbor_ori = neighbor
+        neighbor_side_facing_us = (facing_us - neighbor_ori) % 4
+        for n_pid, n_side, n_error in ps[neighbor_pid][neighbor_side_facing_us]:
+            if n_pid == candidate_pid:
+                costs.append(n_error)
+                break
+    if not costs:
+        return 0
+    return max(costs)
+
+
 def build_from_corner(ps, start_piece_id, edge_length,
                       puzzle_width=None, puzzle_height=None,
                       on_milestone=None):
@@ -343,6 +361,7 @@ def build_from_corner(ps, start_piece_id, edge_length,
             neighbor_orientation = (OPPOSITE[direction] - neighbor_side_index) % 4
             ok, err = board.can_place(piece_id=neighbor_piece_id, fits=ps[neighbor_piece_id], x=x, y=y, orientation=neighbor_orientation)
             if ok:
+                combined = _get_combined_cost(board, neighbor_piece_id, ps, x, y)
                 next_board = Board.copy(board)
                 next_board.place(neighbor_piece_id, ps[neighbor_piece_id], x, y, neighbor_orientation)
                 next_direction = direction
@@ -355,7 +374,7 @@ def build_from_corner(ps, start_piece_id, edge_length,
                     next_y = y + (1 if next_direction == BOTTOM else -1 if next_direction == TOP else 0)
 
                 data = [next_board, neighbor_piece_id, neighbor_orientation, next_x, next_y, next_direction]
-                heapq.heappush(priority_q, (error, data))
+                heapq.heappush(priority_q, (combined, data))
 
     if board.placed_count == total:
         print(f"Found solution after {iteration} iterations!")
