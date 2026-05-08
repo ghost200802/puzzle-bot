@@ -683,9 +683,265 @@ class TargetedSolver:
             self._draw_progress(iteration, output_dir)
 
         elapsed = time.time() - t0
-        print(f"\nDone: {self.board.placed_count}/{self.pw * self.ph} in "
+        print(f"\nDone connectivity phase: {self.board.placed_count}/{self.pw * self.ph} in "
               f"{iteration} iters ({elapsed:.1f}s)")
+
+        used_pids = self._get_used_pids()
+        all_pids = set(self.connectivity.keys())
+        missing = sorted(p for p in all_pids if p not in used_pids)
+
+        if missing:
+            print(f"\n{'='*60}")
+            print(f"Relaxed search (threshold=0.7, no connectivity constraint)")
+            print(f"{'='*60}")
+            relaxed_threshold = 0.7
+            changed_relaxed = True
+            while changed_relaxed:
+                changed_relaxed = False
+                used_pids = self._get_used_pids()
+                missing_now = sorted(p for p in all_pids if p not in used_pids)
+                if not missing_now:
+                    break
+                empty_positions = self._find_adjacent_empty()
+                if not empty_positions:
+                    break
+
+                for pid in missing_now:
+                    if pid not in self.piece_images:
+                        continue
+                    best_score = 0
+                    best_pos = None
+                    for gx, gy in empty_positions:
+                        if self.board.get(gx, gy) is not None:
+                            continue
+                        for ori in range(4):
+                            score, dx, dy, angle = self._try_piece(pid, ori, gx, gy)
+                            if score > best_score:
+                                best_score = score
+                                best_pos = (gx, gy, ori, dx, dy, angle)
+
+                    if best_score >= relaxed_threshold and best_pos:
+                        gx, gy, ori, dx, dy, angle = best_pos
+                        fits = self.ps_raw.get(pid, [[], [], [], []])
+                        self.board.place(pid, fits, gx, gy, ori)
+                        used_pids.add(pid)
+                        self.ncc_data[pid] = {
+                            'dx': dx, 'dy': dy, 'angle': angle, 'score': best_score,
+                        }
+                        t = self._compute_transform(pid, ori, gx, gy)
+                        if t is not None:
+                            self._orig_transforms[pid] = t
+                        changed_relaxed = True
+                        print(f"  + {pid} at ({gx},{gy}) ori={ori} NCC={best_score:.4f} [relaxed]")
+                        break
+
+                if changed_relaxed:
+                    self._draw_progress(iteration + 100, output_dir)
+
+            used_pids = self._get_used_pids()
+            still_missing = sorted(p for p in all_pids if p not in used_pids)
+            if still_missing:
+                print(f"\n--- Still missing ({len(still_missing)}), max NCC below 0.7 ---")
+                for pid in still_missing:
+                    if pid not in self.piece_images:
+                        print(f"  #{pid}: no color image")
+                        continue
+                    best_score = 0
+                    best_pos = None
+                    for gy in range(self.ph):
+                        for gx in range(self.pw):
+                            if self.board.get(gx, gy) is not None:
+                                continue
+                            for ori in range(4):
+                                score, _, _, _ = self._try_piece(pid, ori, gx, gy)
+                                if score > best_score:
+                                    best_score = score
+                                    best_pos = (gx, gy, ori)
+                    if best_pos:
+                        print(f"  #{pid}: max NCC={best_score:.4f} at ({best_pos[0]},{best_pos[1]}) ori={best_pos[2]}")
+                    else:
+                        print(f"  #{pid}: no valid position found")
+
+        print(f"\nFinal: {self.board.placed_count}/{self.pw * self.ph}")
+
+        self._draw_transparent(output_dir)
+
         return self.board
+
+    def _draw_transparent(self, output_dir):
+        canvas_info = self._orig_canvas_info
+        if not canvas_info:
+            return
+        min_x = canvas_info['min_x']
+        min_y = canvas_info['min_y']
+        margin = max(canvas_info['max_x'] - min_x, canvas_info['max_y'] - min_y) * 0.05
+        header_h = 60
+        gen_scale = 1.0
+        rs = self._orig_resize_scale
+
+        canvas_w = int((canvas_info['max_x'] - min_x + 2 * margin) * gen_scale * rs)
+        canvas_h = int(((canvas_info['max_y'] - min_y + 2 * margin) * gen_scale + header_h) * rs)
+        canvas = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
+
+        for gy in range(self.ph):
+            for gx in range(self.pw):
+                cell = self.board.get(gx, gy)
+                if cell is None:
+                    continue
+                pid, _, ori = cell
+                if pid not in self.piece_images or pid not in self._orig_transforms:
+                    continue
+
+                rotation, translation, ic = self._orig_transforms[pid]
+                piece_bgr = self.piece_images[pid]
+                alpha_raw = self.piece_alphas[pid]
+                h_img, w_img = piece_bgr.shape[:2]
+
+                cos_r = math.cos(rotation)
+                sin_r = math.sin(rotation)
+                corners = [(0, 0), (w_img, 0), (w_img, h_img), (0, h_img)]
+                img_pts = []
+                for cx, cy in corners:
+                    ddx = cx - ic[0]
+                    ddy = cy - ic[1]
+                    ox = ddx * cos_r - ddy * sin_r + ic[0] + translation[0]
+                    oy = ddx * sin_r + ddy * cos_r + ic[1] + translation[1]
+                    img_pts.append((ox, oy))
+
+                img_min_x = min(p[0] for p in img_pts)
+                img_min_y = min(p[1] for p in img_pts)
+                img_max_x = max(p[0] for p in img_pts)
+                img_max_y = max(p[1] for p in img_pts)
+
+                out_w_gen = int(math.ceil((img_max_x - img_min_x) * gen_scale)) + 2
+                out_h_gen = int(math.ceil((img_max_y - img_min_y) * gen_scale)) + 2
+
+                cos_neg = math.cos(-rotation)
+                sin_neg = math.sin(-rotation)
+                sm_x = (img_min_x - ic[0] - translation[0]) * gen_scale
+                sm_y = (img_min_y - ic[1] - translation[1]) * gen_scale
+
+                a_v = cos_neg * gen_scale
+                b_v = -sin_neg * gen_scale
+                c_v = cos_neg * sm_x - sin_neg * sm_y + ic[0]
+                d_v = sin_neg * gen_scale
+                e_v = cos_neg * gen_scale
+                f_v = sin_neg * sm_x + cos_neg * sm_y + ic[1]
+
+                M_pil = np.array([[a_v, b_v, c_v], [d_v, e_v, f_v], [0, 0, 1]], dtype=np.float64)
+                M_aff = np.linalg.inv(M_pil)[:2, :]
+
+                piece_gen = cv2.warpAffine(piece_bgr, M_aff, (out_w_gen, out_h_gen),
+                                            flags=cv2.INTER_AREA,
+                                            borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+                alpha_gen = cv2.warpAffine(alpha_raw, M_aff, (out_w_gen, out_h_gen),
+                                            flags=cv2.INTER_AREA,
+                                            borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+                out_w = max(1, int(out_w_gen * rs))
+                out_h = max(1, int(out_h_gen * rs))
+                piece_final = cv2.resize(piece_gen, (out_w, out_h), interpolation=cv2.INTER_AREA)
+                alpha_final = cv2.resize(alpha_gen, (out_w, out_h), interpolation=cv2.INTER_AREA)
+
+                nd = self.ncc_data.get(pid, {})
+                ddx = nd.get('dx', 0)
+                ddy = nd.get('dy', 0)
+                angle = nd.get('angle', 0)
+
+                if abs(angle) > 0.01:
+                    M_rot = cv2.getRotationMatrix2D((out_w / 2, out_h / 2), angle, 1.0)
+                    piece_final = cv2.warpAffine(piece_final, M_rot, (out_w, out_h),
+                                                  borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+                    alpha_final = cv2.warpAffine(alpha_final, M_rot, (out_w, out_h),
+                                                  borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+
+                paste_x = (img_min_x - min_x + margin) * gen_scale * rs
+                paste_y = ((img_min_y - min_y + margin) * gen_scale + header_h) * rs
+
+                fx = int(paste_x) + int(ddx)
+                fy = int(paste_y) + int(ddy)
+
+                px1 = max(0, fx)
+                py1 = max(0, fy)
+                px2 = min(canvas_w, fx + out_w)
+                py2 = min(canvas_h, fy + out_h)
+                sx1 = px1 - fx
+                sy1 = py1 - fy
+                sx2 = sx1 + (px2 - px1)
+                sy2 = sy1 + (py2 - py1)
+                if sx2 <= sx1 or sy2 <= sy1:
+                    continue
+
+                a_region = alpha_final[sy1:sy2, sx1:sx2].astype(np.float32) / 255.0
+                a3 = np.stack([a_region] * 3, axis=2)
+                a4 = a_region
+
+                existing = canvas[py1:py2, px1:px2]
+                existing_alpha = existing[:, :, 3].astype(np.float32) / 255.0
+
+                out_a = a_region + existing_alpha * (1 - a_region)
+                out_a = np.clip(out_a, 0, 1)
+                out_a3 = np.stack([out_a] * 3, axis=2)
+
+                src_rgb = piece_final[sy1:sy2, sx1:sx2].astype(np.float32)
+                dst_rgb = existing[:, :, :3].astype(np.float32)
+                dst_a = existing_alpha[:, :, np.newaxis]
+
+                out_rgb = (src_rgb * a3 + dst_rgb * dst_a * (1 - a3)) / np.maximum(out_a3, 1e-6)
+
+                canvas[py1:py2, px1:px2, :3] = np.clip(out_rgb, 0, 255).astype(np.uint8)
+                canvas[py1:py2, px1:px2, 3] = np.clip(out_a * 255, 0, 255).astype(np.uint8)
+
+        used_pids = self._get_used_pids()
+        all_pids = set(self.connectivity.keys())
+        missing = sorted(p for p in all_pids if p not in used_pids)
+
+        if not missing:
+            path = os.path.join(output_dir, 'puzzle_transparent.png')
+            cv2.imwrite(path, canvas)
+            print(f"  Saved {path} (complete, no missing pieces)")
+            return
+
+        cell_sz = 120
+        cols_missing = min(len(missing), 5)
+        missing_w = cols_missing * (cell_sz + 10) + 20
+        missing_h = ((len(missing) - 1) // cols_missing + 1) * (cell_sz + 30) + 20
+
+        total_w = canvas_w + 20 + missing_w
+        total_h = max(canvas_h, missing_h)
+        vis = np.zeros((total_h, total_w, 3), dtype=np.uint8)
+        vis[:, :, :] = 30
+
+        vis[:canvas_h, :canvas_w] = canvas[:, :, :3]
+
+        for i, pid in enumerate(missing):
+            col = i % cols_missing
+            row = i // cols_missing
+            x0 = canvas_w + 20 + col * (cell_sz + 10) + 10
+            y0 = row * (cell_sz + 30) + 10
+
+            cv2.putText(vis, f"#{pid}", (x0 + 5, y0 + 15),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+
+            if pid in self.piece_images:
+                bgr = self.piece_images[pid].copy()
+                alpha = self.piece_alphas[pid]
+                bgr[alpha < 128] = 30
+                h, w = bgr.shape[:2]
+                scale = min((cell_sz - 4) / w, (cell_sz - 4) / h)
+                rw, rh = int(w * scale), int(h * scale)
+                bgr = cv2.resize(bgr, (rw, rh))
+                px = x0 + (cell_sz - rw) // 2
+                py = y0 + 22 + (cell_sz - rh) // 2
+                vis[py:py + rh, px:px + rw] = bgr
+
+        path = os.path.join(output_dir, 'puzzle_transparent.png')
+        cv2.imwrite(path, canvas)
+        print(f"  Saved {path}")
+
+        path2 = os.path.join(output_dir, 'puzzle_result_with_missing.png')
+        cv2.imwrite(path2, vis)
+        print(f"  Saved {path2} ({len(missing)} missing: {missing})")
 
     def save_results(self):
         output_dir = os.path.join(os.path.dirname(self.solution_dir), 'targeted_solve')
