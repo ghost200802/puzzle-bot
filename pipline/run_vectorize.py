@@ -8,10 +8,8 @@ sys.path.insert(0, os.path.join(_here, '..', 'src'))
 sys.path.insert(0, os.path.join(_here, '..', 'src', 'check'))
 from common.config import VECTOR_DIR
 from common import vector
+from config import set_output_root, get_output_dir, get_vector_path
 
-OUTPUT_ROOT = os.environ.get('PUZZLE_OUTPUT_ROOT', '')
-BMP_DIR = os.path.join(OUTPUT_ROOT, '2_piece_bmps')
-VECTOR_OUT = os.path.join(OUTPUT_ROOT, VECTOR_DIR)
 NUM_WORKERS = min(max(1, multiprocessing.cpu_count() - 2), 14)
 
 
@@ -24,22 +22,17 @@ def _process_one(args):
 
 
 def main():
-    global OUTPUT_ROOT, BMP_DIR, VECTOR_OUT
-
     import argparse
     parser = argparse.ArgumentParser(description='Vectorize piece outlines')
-    parser.add_argument('-o', '--output', default=OUTPUT_ROOT,
+    parser.add_argument('-o', '--output', default=None,
                         help='Output root directory')
     args = parser.parse_args()
-    OUTPUT_ROOT = args.output
 
-    if not OUTPUT_ROOT:
-        print("ERROR: output dir not set. Use -o or set PUZZLE_OUTPUT_ROOT env var.")
-        sys.exit(1)
-    os.environ['PUZZLE_OUTPUT_ROOT'] = OUTPUT_ROOT
+    if args.output:
+        set_output_root(args.output)
 
-    BMP_DIR = os.path.join(OUTPUT_ROOT, '2_piece_bmps')
-    VECTOR_OUT = os.path.join(OUTPUT_ROOT, VECTOR_DIR)
+    BMP_DIR = os.path.join(get_output_dir(), '2_piece_bmps')
+    VECTOR_OUT = get_vector_path()
 
     os.makedirs(VECTOR_OUT, exist_ok=True)
 

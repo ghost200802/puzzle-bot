@@ -1,7 +1,10 @@
+import os
 import json
 import numpy as np
 
-with open('../output/puzzle_new/5_connectivity/connectivity.json') as f:
+from config import get_connectivity_path
+
+with open(os.path.join(get_connectivity_path(), 'connectivity.json')) as f:
     data = json.load(f)
 
 counts = []

@@ -26,7 +26,9 @@ import numpy as np
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output')
+from config import get_output_dir
+
+OUTPUT_DIR = os.path.dirname(get_output_dir())
 EXAMPLE_DATA = os.path.join(_here, '..', '..', 'example_data')
 
 

@@ -8,15 +8,10 @@ from collections import Counter
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-from common.config import DEDUPED_DIR, CONNECTIVITY_DIR, SOLUTION_DIR
+from config import set_output_root, get_output_dir, get_deduped_path, get_connectivity_path, get_solution_path
 from common import board, output as board_output
 from common.board import build_from_corner, Board
 from solve_display import generate_assembly_png
-
-OUTPUT_ROOT = os.environ.get('PUZZLE_OUTPUT_ROOT', '')
-DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
-CONNECTIVITY_PATH = os.path.join(OUTPUT_ROOT, CONNECTIVITY_DIR)
-SOLUTION_PATH = os.path.join(OUTPUT_ROOT, SOLUTION_DIR)
 
 NCC_PRIORITY_WEIGHT = 1000.0
 
@@ -179,31 +174,27 @@ def determine_dimensions(ps, corners, piece_edge_info, n_pieces):
 
 
 def main():
-    global OUTPUT_ROOT, DEDUPED_PATH, CONNECTIVITY_PATH, SOLUTION_PATH
 
     import argparse
     parser = argparse.ArgumentParser(description='Solve the puzzle')
-    parser.add_argument('-o', '--output', default=OUTPUT_ROOT,
+    parser.add_argument('-o', '--output', default=None,
                         help='Output root directory')
     args = parser.parse_args()
-    OUTPUT_ROOT = args.output
+    if args.output:
+        set_output_root(args.output)
 
-    if not OUTPUT_ROOT:
-        print("ERROR: output dir not set. Use -o or set PUZZLE_OUTPUT_ROOT env var.")
-        sys.exit(1)
-    os.environ['PUZZLE_OUTPUT_ROOT'] = OUTPUT_ROOT
-
-    DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
-    CONNECTIVITY_PATH = os.path.join(OUTPUT_ROOT, CONNECTIVITY_DIR)
-    SOLUTION_PATH = os.path.join(OUTPUT_ROOT, SOLUTION_DIR)
+    output_dir = get_output_dir()
+    deduped_path = get_deduped_path()
+    connectivity_path = get_connectivity_path()
+    solution_path = get_solution_path()
 
     print("=" * 60)
     print("Puzzle Solve (NCC Priority + Spiral Assembly)")
     print("=" * 60)
 
-    connectivity_file = os.path.join(CONNECTIVITY_PATH, 'connectivity.json')
-    edge_info_file = os.path.join(CONNECTIVITY_PATH, 'piece_edge_info.json')
-    ncc_report_file = os.path.join(CONNECTIVITY_PATH, 'texture_verify_report.json')
+    connectivity_file = os.path.join(connectivity_path, 'connectivity.json')
+    edge_info_file = os.path.join(connectivity_path, 'piece_edge_info.json')
+    ncc_report_file = os.path.join(connectivity_path, 'texture_verify_report.json')
 
     with open(connectivity_file, 'r') as f:
         connectivity_raw = json.load(f)
@@ -228,7 +219,7 @@ def main():
     print(f"Pieces: {n_pieces}")
     print(f"Corners: {corners}")
 
-    os.makedirs(SOLUTION_PATH, exist_ok=True)
+    os.makedirs(solution_path, exist_ok=True)
 
     print("\n--- Building NCC-enhanced connectivity ---")
     ps_ncc = build_ncc_ps(ps_raw, ncc_lookup)
@@ -255,7 +246,7 @@ def main():
         reverse=True
     )
 
-    ms_root = os.path.join(SOLUTION_PATH, 'milestone')
+    ms_root = os.path.join(solution_path, 'milestone')
     if os.path.exists(ms_root):
         shutil.rmtree(ms_root)
     os.makedirs(ms_root, exist_ok=True)
@@ -269,11 +260,11 @@ def main():
         except Exception as e:
             print(f"    grid failed: {e}")
         try:
-            board_output.generate_solution_svg(b, DEDUPED_PATH, ms_dir)
+            board_output.generate_solution_svg(b, deduped_path, ms_dir)
         except Exception as e:
             print(f"    svg failed: {e}")
         try:
-            generate_assembly_png(b, DEDUPED_PATH, OUTPUT_ROOT,
+            generate_assembly_png(b, deduped_path, output_dir,
                                   os.path.join(ms_dir, 'assembly.png'))
         except Exception as e:
             print(f"    assembly failed: {e}")
@@ -309,13 +300,13 @@ def main():
     print(best_solution)
 
     print("\n--- Generating outputs ---")
-    board_output.generate_solution_grid(best_solution, SOLUTION_PATH)
-    board_output.generate_solution_svg(best_solution, DEDUPED_PATH, SOLUTION_PATH)
-    generate_assembly_png(best_solution, DEDUPED_PATH, OUTPUT_ROOT,
-                          os.path.join(SOLUTION_PATH, 'assembly.png'))
+    board_output.generate_solution_grid(best_solution, solution_path)
+    board_output.generate_solution_svg(best_solution, deduped_path, solution_path)
+    generate_assembly_png(best_solution, deduped_path, output_dir,
+                          os.path.join(solution_path, 'assembly.png'))
 
     meta = {'width': w, 'height': h}
-    with open(os.path.join(SOLUTION_PATH, 'solution_meta.json'), 'w') as f:
+    with open(os.path.join(solution_path, 'solution_meta.json'), 'w') as f:
         json.dump(meta, f, indent=2)
     print(f"  solution_meta.json saved: {w}x{h}")
 
@@ -325,7 +316,7 @@ def main():
     print(f"  Matched edges: {eval_result['matched_edges']}/{eval_result['total_possible_edges']}")
     print(f"  Match quality: {eval_result['match_quality']:.1%}")
 
-    print(f"\nAll outputs saved to {SOLUTION_PATH}/")
+    print(f"\nAll outputs saved to {solution_path}/")
 
 
 if __name__ == '__main__':

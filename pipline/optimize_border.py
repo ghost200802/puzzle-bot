@@ -9,11 +9,11 @@ from common.board import Board, OPPOSITE, TOP, RIGHT, BOTTOM, LEFT
 from common import output as board_output
 from solve_display import generate_assembly_png
 
-from config import get_deduped_path, get_connectivity_path, get_solution_path
+from config import get_output_dir, get_deduped_path, get_connectivity_path, get_solution_path
 from solver_utils import (parse_grid, load_connectivity_and_ncc,
                            get_oriented_cost, ORI_MAP, ORI_CHARS)
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
+OUTPUT_DIR = get_output_dir()
 DEDUPED_PATH = get_deduped_path()
 CONNECTIVITY_PATH = get_connectivity_path()
 SOLUTION_PATH = get_solution_path()

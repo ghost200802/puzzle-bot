@@ -6,7 +6,7 @@ import heapq
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-from common.config import DEDUPED_DIR, CONNECTIVITY_DIR, SOLUTION_DIR
+from config import get_output_dir
 from common.board import Board, OPPOSITE, TOP, RIGHT, BOTTOM, LEFT
 from common import output as board_output
 
@@ -195,7 +195,7 @@ def save_solution(board, deduped_path, output_dir, output_name='puzzle_new'):
     board_output.generate_solution_grid(board, output_dir)
     board_output.generate_solution_svg(board, deduped_path, output_dir)
 
-    output_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'output', output_name)
+    output_root = get_output_dir(output_name)
     generate_assembly_png(
         board, deduped_path, output_root,
         os.path.join(output_dir, 'assembly.png'),

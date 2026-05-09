@@ -38,9 +38,10 @@ from common.config import (
 )
 from common.find_islands import save_island_as_bmp
 from common import vector, dedupe
+from config import get_output_dir
 
 INPUT_DIR = os.path.join(_here, '..', 'input', 'puzzles')
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
+OUTPUT_DIR = get_output_dir()
 
 
 def _touches_border(ys, xs, img_h, img_w, margin=2):

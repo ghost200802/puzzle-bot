@@ -8,8 +8,10 @@ sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
 from common.texture_verify import load_side_data, _resample_polyline, N_SAMPLES
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, '3_vector')
+from config import get_output_dir, get_vector_path
+
+OUTPUT_DIR = get_output_dir()
+DEDUPED_PATH = get_vector_path()
 
 PID_A, SI_A = 4, 3
 PID_B, SI_B = 137, 3

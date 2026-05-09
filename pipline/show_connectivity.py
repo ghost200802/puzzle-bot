@@ -10,6 +10,8 @@ sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
 from PIL import Image, ImageDraw, ImageFont
 
+from config import get_output_dir, get_deduped_path, get_connectivity_path
+
 
 def show(connectivity_dir, deduped_dir, output_dir):
     os.makedirs(output_dir, exist_ok=True)
@@ -753,9 +755,9 @@ def _write_report(placed, match_log, piece_edge_info, connectivity, output_path)
 
 
 if __name__ == '__main__':
-    OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-    DEDUPED_PATH = os.path.join(OUTPUT_DIR, '4_deduped')
-    CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, '5_connectivity')
+    OUTPUT_DIR = get_output_dir()
+    DEDUPED_PATH = get_deduped_path()
+    CONNECTIVITY_PATH = get_connectivity_path()
     CHECK_PATH = os.path.join(OUTPUT_DIR, 'check', 'connectivity')
 
     show(CONNECTIVITY_PATH, DEDUPED_PATH, CHECK_PATH)

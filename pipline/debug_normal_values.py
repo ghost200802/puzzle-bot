@@ -15,8 +15,10 @@ from common.texture_verify import (
     _apply_transform, _apply_inverse_transform, N_SAMPLES
 )
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, '3_vector')
+from config import get_output_dir, get_vector_path
+
+OUTPUT_DIR = get_output_dir()
+DEDUPED_PATH = get_vector_path()
 
 PID_A, SI_A = 4, 3
 PID_B, SI_B = 137, 3

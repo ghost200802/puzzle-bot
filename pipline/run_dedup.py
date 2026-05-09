@@ -28,8 +28,8 @@ META_PATH = os.path.join(CHECK_PATH, 'dedup_match_meta.json')
 NUM_WORKERS = min(max(1, multiprocessing.cpu_count() - 2), 14)
 
 
-def compute_contrast(pid):
-    path = os.path.join(COLOR_DIR, f'piece_{pid}.png')
+def compute_contrast(pid, color_dir):
+    path = os.path.join(color_dir, f'piece_{pid}.png')
     if not os.path.exists(path):
         return 0.0
     img = np.array(Image.open(path).convert('RGBA'))
@@ -275,25 +275,20 @@ def _compute_ncc_task(args):
 
 
 def main():
-    global OUTPUT_ROOT, VECTOR_PATH, DEDUPED_PATH, CHECK_PATH, BMP_DIR, COLOR_DIR, META_PATH
-
     import argparse
     parser = argparse.ArgumentParser(description='Deduplicate puzzle pieces')
-    parser.add_argument('-o', '--output', default=OUTPUT_ROOT,
+    parser.add_argument('-o', '--output', default=None,
                         help='Output root directory')
     args = parser.parse_args()
-    OUTPUT_ROOT = args.output
 
-    if not OUTPUT_ROOT:
-        print("ERROR: output dir not set. Use -o or set PUZZLE_OUTPUT_ROOT env var.")
-        sys.exit(1)
-    os.environ['PUZZLE_OUTPUT_ROOT'] = OUTPUT_ROOT
+    if args.output:
+        set_output_root(args.output)
 
-    VECTOR_PATH = os.path.join(OUTPUT_ROOT, VECTOR_DIR)
-    DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
-    CHECK_PATH = os.path.join(OUTPUT_ROOT, CHECK_DIR)
-    BMP_DIR = os.path.join(OUTPUT_ROOT, '2_piece_bmps')
-    COLOR_DIR = os.path.join(OUTPUT_ROOT, '2_piece_colors')
+    VECTOR_PATH = get_vector_path()
+    DEDUPED_PATH = get_deduped_path()
+    CHECK_PATH = get_check_path()
+    BMP_DIR = os.path.join(get_output_dir(), '2_piece_bmps')
+    COLOR_DIR = get_color_path()
     META_PATH = os.path.join(CHECK_PATH, 'dedup_match_meta.json')
 
     if os.path.exists(DEDUPED_PATH):
@@ -410,7 +405,7 @@ def main():
     uniques = set()
     contrast_cache = {}
     for pid in pieces:
-        contrast_cache[pid] = compute_contrast(pid)
+        contrast_cache[pid] = compute_contrast(pid, COLOR_DIR)
     for root, members in groups.items():
         best = max(members, key=lambda pid: contrast_cache[pid])
         uniques.add(best)

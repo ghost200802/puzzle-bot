@@ -10,7 +10,6 @@ import cv2
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-from common.config import DEDUPED_DIR, CONNECTIVITY_DIR, VECTOR_DIR
 from common.texture_verify import (
     load_side_data, load_color_image, extract_inner_band,
     compute_texture_richness, compute_seam_color_diff,
@@ -18,12 +17,14 @@ from common.texture_verify import (
     INNER_OFFSET, BAND_WIDTH, N_SAMPLES,
 )
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
-CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, CONNECTIVITY_DIR)
-COLOR_PATH = os.path.join(OUTPUT_DIR, '2_piece_colors')
+from config import get_output_dir, get_deduped_path, get_connectivity_path, get_color_path, get_vector_path
+
+OUTPUT_DIR = get_output_dir()
+DEDUPED_PATH = get_deduped_path()
+CONNECTIVITY_PATH = get_connectivity_path()
+COLOR_PATH = get_color_path()
 if not os.path.isdir(COLOR_PATH):
-    COLOR_PATH = os.path.join(OUTPUT_DIR, VECTOR_DIR)
+    COLOR_PATH = get_vector_path()
 
 
 def _draw_band_on_image(img, side_vertices, piece_center, mask, color=(0, 255, 0)):
@@ -83,7 +84,7 @@ def _draw_band_on_image(img, side_vertices, piece_center, mask, color=(0, 255, 0
 
 def visualize(pid_a, si_a, pid_b, si_b, output_dir=None):
     if output_dir is None:
-        output_dir = os.path.join(_here, '..', 'output', 'texture_vis')
+        output_dir = get_output_dir('texture_vis')
     os.makedirs(output_dir, exist_ok=True)
 
     side_a = load_side_data(DEDUPED_PATH, pid_a, si_a)

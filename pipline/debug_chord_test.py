@@ -13,9 +13,11 @@ from common.texture_verify import (
     compute_pattern_ncc, _resample_polyline, _resample_by_chord
 )
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, '3_vector')
-COLOR_PATH = os.path.join(OUTPUT_DIR, '2_piece_colors')
+from config import get_output_dir, get_vector_path, get_color_path
+
+OUTPUT_DIR = get_output_dir()
+DEDUPED_PATH = get_vector_path()
+COLOR_PATH = get_color_path()
 
 PID_A, SI_A = 4, 3
 PID_B, SI_B = 137, 3

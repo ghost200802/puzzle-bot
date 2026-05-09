@@ -1,7 +1,10 @@
+import os
 import json
 import numpy as np
 
-REPORT_PATH = '../output/puzzle_new/5_connectivity/texture_verify_report.json'
+from config import get_connectivity_path
+
+REPORT_PATH = os.path.join(get_connectivity_path(), 'texture_verify_report.json')
 with open(REPORT_PATH) as f:
     data = json.load(f)
 

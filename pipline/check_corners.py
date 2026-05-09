@@ -5,10 +5,10 @@ import json
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-from common.config import CONNECTIVITY_DIR
+from config import get_output_dir, get_connectivity_path
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, CONNECTIVITY_DIR)
+OUTPUT_DIR = get_output_dir()
+CONNECTIVITY_PATH = get_connectivity_path()
 
 connectivity_file = os.path.join(CONNECTIVITY_PATH, 'connectivity.json')
 edge_info_file = os.path.join(CONNECTIVITY_PATH, 'piece_edge_info.json')

@@ -21,9 +21,7 @@ from run_matchtarget import (
     load_solution, _build_board_from_placed, _resize_to_max,
     _histogram_match_cdf, TargetMatcher,
 )
-
-OUTPUT_ROOT = os.environ.get('PUZZLE_OUTPUT_ROOT', '')
-DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
+from config import set_output_root, get_output_dir
 
 ERODE_PX = 5
 NCC_ACCEPT = 0.8
@@ -258,6 +256,7 @@ class TargetedSolver:
         report_path = os.path.join(os.path.dirname(solution_dir), 'target_match_report.json')
         with open(report_path, 'r') as f:
             self.report = json.load(f)
+        self.best_rotation = self.report.get('_meta', {}).get('orientation', 0)
 
         connectivity_file = os.path.join(output_root, '5_connectivity', 'connectivity.json')
         self.connectivity = _load_connectivity(connectivity_file)
@@ -277,6 +276,7 @@ class TargetedSolver:
             )
             matcher.rectify_target()
             self.target_aligned = matcher.target_aligned
+            self.best_rotation = matcher.best_rotation
         elif os.path.exists(target_aligned_path):
             self.target_aligned = cv2.imread(target_aligned_path)
             print(f"  Loaded target_aligned from {target_aligned_path}")
@@ -308,6 +308,8 @@ class TargetedSolver:
 
         self.ncc_data = {}
         for pid_str, r in self.report.items():
+            if pid_str.startswith('_'):
+                continue
             pid = int(pid_str)
             if pid in self.fixed_pids:
                 self.ncc_data[pid] = {
@@ -768,6 +770,18 @@ class TargetedSolver:
 
         return self.board
 
+    def _rotate_back(self, img):
+        inv = {
+            0: None,
+            1: cv2.ROTATE_90_COUNTERCLOCKWISE,
+            2: cv2.ROTATE_180,
+            3: cv2.ROTATE_90_CLOCKWISE,
+        }
+        r = inv.get(self.best_rotation)
+        if r is None:
+            return img
+        return cv2.rotate(img, r)
+
     def _draw_transparent(self, output_dir):
         canvas_info = self._orig_canvas_info
         if not canvas_info:
@@ -897,6 +911,7 @@ class TargetedSolver:
         missing = sorted(p for p in all_pids if p not in used_pids)
 
         if not missing:
+            canvas = self._rotate_back(canvas)
             path = os.path.join(output_dir, 'puzzle_transparent.png')
             cv2.imwrite(path, canvas)
             print(f"  Saved {path} (complete, no missing pieces)")
@@ -935,6 +950,9 @@ class TargetedSolver:
                 py = y0 + 22 + (cell_sz - rh) // 2
                 vis[py:py + rh, px:px + rw] = bgr
 
+        canvas = self._rotate_back(canvas)
+        vis = self._rotate_back(vis)
+
         path = os.path.join(output_dir, 'puzzle_transparent.png')
         cv2.imwrite(path, canvas)
         print(f"  Saved {path}")
@@ -953,6 +971,11 @@ class TargetedSolver:
             generate_assembly_png(self.board, self.deduped_dir,
                                   os.path.dirname(self.color_dir),
                                   os.path.join(output_dir, 'assembly.png'))
+            ass_path = os.path.join(output_dir, 'assembly.png')
+            ass_img = cv2.imread(ass_path)
+            if ass_img is not None:
+                ass_img = self._rotate_back(ass_img)
+                cv2.imwrite(ass_path, ass_img)
         except Exception as e:
             print(f"  Assembly failed: {e}")
 
@@ -979,26 +1002,18 @@ class TargetedSolver:
 
 
 def main():
-    global OUTPUT_ROOT, DEDUPED_PATH
-
     parser = argparse.ArgumentParser(description='Targeted puzzle solver using target image NCC')
     parser.add_argument('--target', default=None, help='Path to target image (optional if target_aligned.png exists)')
     parser.add_argument('--solution', required=True, help='Path to solution directory')
-    parser.add_argument('-o', '--output-root', default=OUTPUT_ROOT,
+    parser.add_argument('-o', '--output-root', default=None,
                         help='Root output directory')
     parser.add_argument('--threshold', type=float, default=NCC_ACCEPT)
     args = parser.parse_args()
 
-    output_root = args.output_root
+    if args.output_root:
+        set_output_root(args.output_root)
 
-    if not output_root:
-        print("ERROR: output dir not set. Use -o or set PUZZLE_OUTPUT_ROOT env var.")
-        sys.exit(1)
-    output_root = os.path.abspath(output_root)
-    os.environ['PUZZLE_OUTPUT_ROOT'] = output_root
-
-    OUTPUT_ROOT = output_root
-    DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
+    output_root = get_output_dir()
 
     solver = TargetedSolver(
         target_image_path=args.target,

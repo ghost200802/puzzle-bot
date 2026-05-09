@@ -15,8 +15,7 @@ sys.path.insert(0, os.path.join(_here, '..', 'src'))
 from common.config import DEDUPED_DIR, SOLUTION_DIR
 from solve_display import generate_assembly_png, compute_piece_transforms
 from common import board as board_mod
-
-OUTPUT_ROOT = os.environ.get('PUZZLE_OUTPUT_ROOT', '')
+from config import set_output_root, get_output_dir
 
 MAX_ASSEMBLY_LONG_SIDE = 2000
 
@@ -700,6 +699,8 @@ class TargetMatcher:
                 'refined': bool(result.get('refined', False)),
             }
 
+        report['_meta'] = {'orientation': self.best_rotation}
+
         report_path = os.path.join(out, 'target_match_report.json')
         with open(report_path, 'w') as f:
             json.dump(report, f, indent=2)
@@ -845,24 +846,18 @@ def match_target(target_image_path, solution, deduped_dir, output_dir,
 
 
 def main():
-    global OUTPUT_ROOT
-
     parser = argparse.ArgumentParser(description='Match puzzle solution against target image')
     parser.add_argument('--target', required=True, help='Path to target image')
     parser.add_argument('--solution', default=None,
                         help='Path to solution directory (default: OUTPUT_ROOT/6_solution)')
-    parser.add_argument('-o', '--output-root', default=OUTPUT_ROOT,
+    parser.add_argument('-o', '--output-root', default=None,
                         help='Root output directory')
     parser.add_argument('--refine-threshold', type=float, default=0.7)
     args = parser.parse_args()
 
-    output_root = args.output_root
-    if not output_root:
-        print("ERROR: output dir not set. Use -o or set PUZZLE_OUTPUT_ROOT env var.")
-        sys.exit(1)
-    output_root = os.path.abspath(output_root)
-    os.environ['PUZZLE_OUTPUT_ROOT'] = output_root
-    OUTPUT_ROOT = output_root
+    if args.output_root:
+        set_output_root(args.output_root)
+    output_root = get_output_dir()
 
     solution_dir = args.solution or os.path.join(output_root, SOLUTION_DIR)
     if not os.path.isdir(solution_dir):

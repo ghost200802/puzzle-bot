@@ -7,15 +7,15 @@ import multiprocessing
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-from common.config import DEDUPED_DIR, CONNECTIVITY_DIR, VECTOR_DIR
 from common.texture_verify import verify_match
+from config import get_output_dir, get_deduped_path, get_connectivity_path, get_color_path, get_vector_path
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
-CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, CONNECTIVITY_DIR)
-COLOR_PATH = os.path.join(OUTPUT_DIR, '2_piece_colors')
+OUTPUT_DIR = get_output_dir()
+DEDUPED_PATH = get_deduped_path()
+CONNECTIVITY_PATH = get_connectivity_path()
+COLOR_PATH = get_color_path()
 if not os.path.isdir(COLOR_PATH):
-    COLOR_PATH = os.path.join(OUTPUT_DIR, VECTOR_DIR)
+    COLOR_PATH = get_vector_path()
 
 ERROR_RATIO_THRESHOLD = 2.0
 NCC_FILTER_RATIO = 0.5

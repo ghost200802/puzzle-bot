@@ -9,8 +9,10 @@ sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
 from common import pieces, sides, util
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, '4_deduped')
+from config import get_output_dir, get_deduped_path
+
+OUTPUT_DIR = get_output_dir()
+DEDUPED_PATH = get_deduped_path()
 
 
 def signed_distance(point, line_p1, line_p2):

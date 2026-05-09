@@ -20,8 +20,10 @@ import cv2
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
+from config import get_output_dir
+
 INPUT_IMAGE = os.path.join(_here, '..', 'input', 'puzzles', '1.png')
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_1')
+OUTPUT_DIR = get_output_dir('puzzle_1')
 
 
 def segment_pieces_from_alpha(image_path):

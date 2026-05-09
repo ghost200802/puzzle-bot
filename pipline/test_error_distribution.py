@@ -6,8 +6,10 @@ import math
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, '5_connectivity')
+from config import get_output_dir, get_connectivity_path
+
+OUTPUT_DIR = get_output_dir()
+CONNECTIVITY_PATH = get_connectivity_path()
 
 with open(os.path.join(CONNECTIVITY_PATH, 'connectivity.json')) as f:
     conn = json.load(f)

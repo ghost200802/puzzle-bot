@@ -10,9 +10,10 @@ sys.path.insert(0, os.path.join(_here, '..', 'src'))
 from common import pieces, sides, util
 from PIL import Image, ImageDraw, ImageFont
 
+from config import get_output_dir, get_deduped_path
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new', 'check', 'match_debug')
-DEDUPED_DIR = os.path.join(_here, '..', 'output', 'puzzle_new', '4_deduped')
+OUTPUT_DIR = os.path.join(get_output_dir(), 'check', 'match_debug')
+DEDUPED_DIR = get_deduped_path()
 
 
 def _signed_distance_to_line(point, line_p1, line_p2):

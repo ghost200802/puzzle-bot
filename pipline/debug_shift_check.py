@@ -14,9 +14,11 @@ from common.texture_verify import (
     _apply_transform, _apply_inverse_transform, N_SAMPLES
 )
 
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, '3_vector')
-COLOR_PATH = os.path.join(OUTPUT_DIR, '2_piece_colors')
+from config import get_output_dir, get_vector_path, get_color_path
+
+OUTPUT_DIR = get_output_dir()
+DEDUPED_PATH = get_vector_path()
+COLOR_PATH = get_color_path()
 
 side_a = load_side_data(DEDUPED_PATH, 4, 3)
 side_b = load_side_data(DEDUPED_PATH, 137, 3)

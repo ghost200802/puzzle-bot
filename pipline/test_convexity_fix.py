@@ -3,7 +3,9 @@ _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 from common import pieces
 
-DEDUPED_DIR = os.path.join(_here, '..', 'output', 'puzzle_new', '4_deduped')
+from config import get_deduped_path
+
+DEDUPED_DIR = get_deduped_path()
 ps = pieces.Piece.load_all(DEDUPED_DIR, resample=False)
 
 for pid in [137, 141]:

@@ -5,15 +5,16 @@ import json
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-from common.config import DEDUPED_DIR, CONNECTIVITY_DIR, SOLUTION_DIR
 from common.board import Board, OPPOSITE, TOP, RIGHT, BOTTOM, LEFT
 from common import output as board_output
 from solve_display import generate_assembly_png
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
-CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, CONNECTIVITY_DIR)
-SOLUTION_PATH = os.path.join(OUTPUT_DIR, SOLUTION_DIR)
+from config import get_output_dir, get_deduped_path, get_connectivity_path, get_solution_path
+
+OUTPUT_DIR = get_output_dir()
+DEDUPED_PATH = get_deduped_path()
+CONNECTIVITY_PATH = get_connectivity_path()
+SOLUTION_PATH = get_solution_path()
 
 ORI_MAP = {'^': 0, '>': 1, 'v': 2, '<': 3}
 

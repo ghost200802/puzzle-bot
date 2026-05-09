@@ -10,8 +10,10 @@ import common.texture_verify as tv
 importlib.reload(tv)
 from common.texture_verify import load_side_data, _resample_by_chord, N_SAMPLES
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, '3_vector')
+from config import get_output_dir, get_vector_path
+
+OUTPUT_DIR = get_output_dir()
+DEDUPED_PATH = get_vector_path()
 
 side_a = load_side_data(DEDUPED_PATH, 4, 3)
 side_b = load_side_data(DEDUPED_PATH, 137, 3)

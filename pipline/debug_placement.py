@@ -10,10 +10,10 @@ sys.path.insert(0, os.path.join(_here, '..', 'src'))
 from common.board import (Board, OPPOSITE, TOP, RIGHT, BOTTOM, LEFT,
                            _orient_start_corner_to_top_left, _get_combined_cost)
 
-from config import get_deduped_path, get_connectivity_path
+from config import get_output_dir, get_deduped_path, get_connectivity_path
 from solver_utils import load_connectivity_and_ncc
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
+OUTPUT_DIR = get_output_dir()
 DEDUPED_PATH = get_deduped_path()
 CONNECTIVITY_PATH = get_connectivity_path()
 

@@ -9,11 +9,7 @@ sys.path.insert(0, os.path.join(_here, '..', 'src'))
 from common.config import DEDUPED_DIR, CONNECTIVITY_DIR
 from common import connect
 from show_connectivity import show as show_connectivity
-
-OUTPUT_ROOT = os.environ.get('PUZZLE_OUTPUT_ROOT', '')
-DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
-CONNECTIVITY_PATH = os.path.join(OUTPUT_ROOT, CONNECTIVITY_DIR)
-CHECK_PATH = os.path.join(OUTPUT_ROOT, 'check', 'connectivity')
+from config import set_output_root, get_deduped_path, get_connectivity_path, get_check_path
 
 
 def build_piece_edge_info(deduped_path):
@@ -32,23 +28,18 @@ def build_piece_edge_info(deduped_path):
 
 
 def main():
-    global OUTPUT_ROOT, DEDUPED_PATH, CONNECTIVITY_PATH, CHECK_PATH
-
     import argparse
     parser = argparse.ArgumentParser(description='Build connectivity graph')
-    parser.add_argument('-o', '--output', default=OUTPUT_ROOT,
+    parser.add_argument('-o', '--output', default=None,
                         help='Output root directory')
     args = parser.parse_args()
-    OUTPUT_ROOT = args.output
 
-    if not OUTPUT_ROOT:
-        print("ERROR: output dir not set. Use -o or set PUZZLE_OUTPUT_ROOT env var.")
-        sys.exit(1)
-    os.environ['PUZZLE_OUTPUT_ROOT'] = OUTPUT_ROOT
+    if args.output:
+        set_output_root(args.output)
 
-    DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
-    CONNECTIVITY_PATH = os.path.join(OUTPUT_ROOT, CONNECTIVITY_DIR)
-    CHECK_PATH = os.path.join(OUTPUT_ROOT, 'check', 'connectivity')
+    DEDUPED_PATH = get_deduped_path()
+    CONNECTIVITY_PATH = get_connectivity_path()
+    CHECK_PATH = os.path.join(get_check_path(), 'connectivity')
 
     print("=" * 60)
     print("Connectivity Building Pipeline (v2)")
