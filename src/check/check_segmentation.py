@@ -7,8 +7,8 @@ sys.path.insert(0, os.path.join(_here, '..'))
 from common.config import PIECE_BMP_DIR, PHONE_TARGET_PIECE_SIZE
 from common.find_islands import save_island_as_bmp
 
-INPUT_DIR = os.path.join(_here, '..', '..', 'input', 'puzzles', 'pieces')
-OUTPUT_DIR = os.path.join(_here, '..', '..', 'output', 'puzzle_new')
+INPUT_ROOT = os.environ.get('PUZZLE_INPUT_ROOT', '')
+OUTPUT_ROOT = os.environ.get('PUZZLE_OUTPUT_ROOT', '')
 BMP_DIR_NAME = PIECE_BMP_DIR
 
 SIZE_RATIO_LOW = 0.35
@@ -211,18 +211,39 @@ def segment_image(image_path, target_size=PHONE_TARGET_PIECE_SIZE):
 
 
 def main():
-    if os.path.exists(OUTPUT_DIR):
+    global INPUT_ROOT, OUTPUT_ROOT
+
+    import argparse
+    parser = argparse.ArgumentParser(description='Segment puzzle pieces from images')
+    parser.add_argument('-i', '--input', default=INPUT_ROOT,
+                        help='Input directory containing piece images')
+    parser.add_argument('-o', '--output', default=OUTPUT_ROOT,
+                        help='Output root directory')
+    args = parser.parse_args()
+    INPUT_ROOT = args.input
+    OUTPUT_ROOT = args.output
+
+    if not INPUT_ROOT:
+        print("ERROR: input dir not set. Use -i or set PUZZLE_INPUT_ROOT env var.")
+        sys.exit(1)
+    if not OUTPUT_ROOT:
+        print("ERROR: output dir not set. Use -o or set PUZZLE_OUTPUT_ROOT env var.")
+        sys.exit(1)
+    os.environ['PUZZLE_INPUT_ROOT'] = INPUT_ROOT
+    os.environ['PUZZLE_OUTPUT_ROOT'] = OUTPUT_ROOT
+
+    if os.path.exists(OUTPUT_ROOT):
         import shutil
-        shutil.rmtree(OUTPUT_DIR)
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+        shutil.rmtree(OUTPUT_ROOT)
+    os.makedirs(OUTPUT_ROOT, exist_ok=True)
 
     image_files = sorted([
-        f for f in os.listdir(INPUT_DIR)
+        f for f in os.listdir(INPUT_ROOT)
         if f.lower().endswith(('.png', '.jpg', '.jpeg'))
     ])
 
-    bmp_dir = os.path.join(OUTPUT_DIR, BMP_DIR_NAME)
-    color_dir = os.path.join(OUTPUT_DIR, '2_piece_colors')
+    bmp_dir = os.path.join(OUTPUT_ROOT, BMP_DIR_NAME)
+    color_dir = os.path.join(OUTPUT_ROOT, '2_piece_colors')
     os.makedirs(bmp_dir, exist_ok=True)
     os.makedirs(color_dir, exist_ok=True)
 
@@ -231,13 +252,13 @@ def main():
 
     print("=" * 60)
     print("Segmentation Pipeline (BMP + Color PNG)")
-    print(f"Input: {INPUT_DIR}")
+    print(f"Input: {INPUT_ROOT}")
     print(f"BMP output: {bmp_dir}")
     print(f"Color output: {color_dir}")
     print("=" * 60)
 
     for img_file in image_files:
-        img_path = os.path.join(INPUT_DIR, img_file)
+        img_path = os.path.join(INPUT_ROOT, img_file)
         print(f"\n  Processing: {img_file}")
         pieces = segment_image(img_path)
         for p in pieces:
@@ -292,7 +313,7 @@ def main():
         print(f"    {img_file}: {len(src_pieces)} pieces")
 
     # Save grid overview
-    inspect_dir = os.path.join(OUTPUT_DIR, 'inspect')
+    inspect_dir = os.path.join(OUTPUT_ROOT, 'inspect')
     os.makedirs(inspect_dir, exist_ok=True)
     for img_file in image_files:
         src_pieces = [p for p in all_pieces if p['source_file'] == img_file]

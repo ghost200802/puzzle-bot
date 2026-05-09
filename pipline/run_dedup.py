@@ -11,12 +11,12 @@ sys.path.insert(0, os.path.join(_here, '..', 'src'))
 sys.path.insert(0, os.path.join(_here, '..', 'src', 'check'))
 from common.config import VECTOR_DIR, DEDUPED_DIR, CHECK_DIR
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-VECTOR_PATH = os.path.join(OUTPUT_DIR, VECTOR_DIR)
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
-CHECK_PATH = os.path.join(OUTPUT_DIR, CHECK_DIR)
-BMP_DIR = os.path.join(OUTPUT_DIR, '2_piece_bmps')
-COLOR_DIR = os.path.join(OUTPUT_DIR, '2_piece_colors')
+OUTPUT_ROOT = os.environ.get('PUZZLE_OUTPUT_ROOT', '')
+VECTOR_PATH = os.path.join(OUTPUT_ROOT, VECTOR_DIR)
+DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
+CHECK_PATH = os.path.join(OUTPUT_ROOT, CHECK_DIR)
+BMP_DIR = os.path.join(OUTPUT_ROOT, '2_piece_bmps')
+COLOR_DIR = os.path.join(OUTPUT_ROOT, '2_piece_colors')
 
 PROFILE_N = 50
 
@@ -275,6 +275,27 @@ def _compute_ncc_task(args):
 
 
 def main():
+    global OUTPUT_ROOT, VECTOR_PATH, DEDUPED_PATH, CHECK_PATH, BMP_DIR, COLOR_DIR, META_PATH
+
+    import argparse
+    parser = argparse.ArgumentParser(description='Deduplicate puzzle pieces')
+    parser.add_argument('-o', '--output', default=OUTPUT_ROOT,
+                        help='Output root directory')
+    args = parser.parse_args()
+    OUTPUT_ROOT = args.output
+
+    if not OUTPUT_ROOT:
+        print("ERROR: output dir not set. Use -o or set PUZZLE_OUTPUT_ROOT env var.")
+        sys.exit(1)
+    os.environ['PUZZLE_OUTPUT_ROOT'] = OUTPUT_ROOT
+
+    VECTOR_PATH = os.path.join(OUTPUT_ROOT, VECTOR_DIR)
+    DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
+    CHECK_PATH = os.path.join(OUTPUT_ROOT, CHECK_DIR)
+    BMP_DIR = os.path.join(OUTPUT_ROOT, '2_piece_bmps')
+    COLOR_DIR = os.path.join(OUTPUT_ROOT, '2_piece_colors')
+    META_PATH = os.path.join(CHECK_PATH, 'dedup_match_meta.json')
+
     if os.path.exists(DEDUPED_PATH):
         shutil.rmtree(DEDUPED_PATH)
     os.makedirs(DEDUPED_PATH, exist_ok=True)
