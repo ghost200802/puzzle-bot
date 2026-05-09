@@ -9,14 +9,8 @@ import multiprocessing
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 sys.path.insert(0, os.path.join(_here, '..', 'src', 'check'))
-from common.config import VECTOR_DIR, DEDUPED_DIR, CHECK_DIR
-
-OUTPUT_ROOT = os.environ.get('PUZZLE_OUTPUT_ROOT', '')
-VECTOR_PATH = os.path.join(OUTPUT_ROOT, VECTOR_DIR)
-DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
-CHECK_PATH = os.path.join(OUTPUT_ROOT, CHECK_DIR)
-BMP_DIR = os.path.join(OUTPUT_ROOT, '2_piece_bmps')
-COLOR_DIR = os.path.join(OUTPUT_ROOT, '2_piece_colors')
+from common.config import VECTOR_DIR, DEDUPED_DIR
+from config import set_output_root, get_output_dir, get_vector_path, get_deduped_path, get_check_path, get_color_path
 
 PROFILE_N = 50
 
@@ -24,7 +18,6 @@ SIDE_RMSE = 0.08
 LENGTH_RATIO = 0.65
 NCC_MIN = 0.65
 
-META_PATH = os.path.join(CHECK_PATH, 'dedup_match_meta.json')
 NUM_WORKERS = min(max(1, multiprocessing.cpu_count() - 2), 14)
 
 
@@ -198,16 +191,16 @@ def _geo_match_task(args):
 
 
 def _compute_ncc_task(args):
-    pid_a, pid_b, rot = args
-    path_a = os.path.join(COLOR_DIR, f'piece_{pid_a}.png')
-    path_b = os.path.join(COLOR_DIR, f'piece_{pid_b}.png')
+    pid_a, pid_b, rot, color_dir, vector_path = args
+    path_a = os.path.join(color_dir, f'piece_{pid_a}.png')
+    path_b = os.path.join(color_dir, f'piece_{pid_b}.png')
     if not os.path.exists(path_a) or not os.path.exists(path_b):
         return pid_a, pid_b, rot, -1.0
 
     img_a = np.array(Image.open(path_a).convert('RGBA'))
     img_b = np.array(Image.open(path_b).convert('RGBA'))
 
-    vp = Path(VECTOR_PATH)
+    vp = Path(vector_path)
     corners_a = []
     corners_b = []
     for j in range(4):
@@ -364,7 +357,7 @@ def main():
 
     # ---- NCC texture verification (multiprocess) ----
     print(f"  Computing NCC with histogram matching (multiprocess)...")
-    ncc_tasks = [(pa, pb, rot) for pa, pb, err, n_match, rot in geo_matches]
+    ncc_tasks = [(pa, pb, rot, COLOR_DIR, VECTOR_PATH) for pa, pb, err, n_match, rot in geo_matches]
     ncc_results = {}
     n_ncc_done = 0
     ncc_batch = max(1, len(ncc_tasks) // 10)

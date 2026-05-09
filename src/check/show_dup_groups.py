@@ -6,19 +6,13 @@ from pathlib import Path
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..'))
 sys.path.insert(0, os.path.join(_here, '..', '..', 'pipline'))
-from common.config import VECTOR_DIR, CHECK_DIR
-
-OUTPUT_DIR = os.path.join(_here, '..', '..', 'output', 'puzzle_new')
-VECTOR_PATH = os.path.join(OUTPUT_DIR, VECTOR_DIR)
-CHECK_PATH = os.path.join(OUTPUT_DIR, CHECK_DIR)
-COLOR_DIR = os.path.join(OUTPUT_DIR, '2_piece_colors')
-META_PATH = os.path.join(CHECK_PATH, 'dedup_match_meta.json')
+from config import get_vector_path, get_check_path, get_color_path
 
 import run_dedup as dedup
 
 
-def load_piece_image(pid):
-    color_path = os.path.join(COLOR_DIR, f'piece_{pid}.png')
+def load_piece_image(pid, color_dir):
+    color_path = os.path.join(color_dir, f'piece_{pid}.png')
     if os.path.exists(color_path):
         return Image.open(color_path).convert('RGBA')
     return None
@@ -41,6 +35,11 @@ def find_group_meta(members, meta_dict):
 
 
 def main():
+    VECTOR_PATH = get_vector_path()
+    CHECK_PATH = get_check_path()
+    COLOR_DIR = get_color_path()
+    META_PATH = os.path.join(CHECK_PATH, 'dedup_match_meta.json')
+
     print("Loading dedup match metadata...")
     with open(META_PATH) as f:
         meta_dict = json.load(f)
@@ -107,7 +106,7 @@ def main():
         pair_metas = find_group_meta(members, meta_dict)
         member_imgs = []
         for pid in sorted(members):
-            img = load_piece_image(pid)
+            img = load_piece_image(pid, COLOR_DIR)
             if img is not None:
                 ratio = THUMB_W / img.width
                 thumb_h = int(img.height * ratio)

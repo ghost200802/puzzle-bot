@@ -6,18 +6,15 @@ from pathlib import Path
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..'))
 sys.path.insert(0, os.path.join(_here, '..', '..', 'pipline'))
-from common.config import VECTOR_DIR, DEDUPED_DIR, CHECK_DIR
-
-OUTPUT_DIR = os.path.join(_here, '..', '..', 'output', 'puzzle_new')
-VECTOR_PATH = os.path.join(OUTPUT_DIR, VECTOR_DIR)
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
-CHECK_PATH = os.path.join(OUTPUT_DIR, CHECK_DIR)
-COLOR_DIR = os.path.join(OUTPUT_DIR, '2_piece_colors')
+from config import get_deduped_path, get_check_path, get_color_path
 
 import run_dedup as dedup
 
 
 def main():
+    DEDUPED_PATH = get_deduped_path()
+    CHECK_PATH = get_check_path()
+    COLOR_DIR = get_color_path()
     print("Loading deduped pieces...")
     pieces = dedup.load_pieces(DEDUPED_PATH)
     print(f"Loaded {len(pieces)} unique pieces")

@@ -90,7 +90,7 @@ def main():
     print(f"{'=' * 60}")
 
     from check_squareness import run_check
-    run_check(OUTPUT_ROOT)
+    run_check(get_output_dir())
 
 
 if __name__ == '__main__':
