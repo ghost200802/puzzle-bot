@@ -242,7 +242,7 @@ def main():
 
     import common.board as board_mod
     board_mod.MAX_ITERATIONS_TO_FIND_BORDER = 50000
-    board_mod.MAX_ITERATIONS = 300000000
+    board_mod.MAX_ITERATIONS = 200000
     print(f"MAX_ITERATIONS_TO_FIND_BORDER: {board_mod.MAX_ITERATIONS_TO_FIND_BORDER}")
 
     print(f"\n{'=' * 60}")
@@ -289,7 +289,6 @@ def main():
             puzzle_width=pw if (pw := w) else None,
             puzzle_height=h,
             on_milestone=on_milestone,
-            ps_fallback=ps_raw,
             stop_after_border=False
         )
         if solution.placed_count > best_count:
@@ -314,6 +313,11 @@ def main():
     board_output.generate_solution_svg(best_solution, DEDUPED_PATH, SOLUTION_PATH)
     generate_assembly_png(best_solution, DEDUPED_PATH, OUTPUT_ROOT,
                           os.path.join(SOLUTION_PATH, 'assembly.png'))
+
+    meta = {'width': w, 'height': h}
+    with open(os.path.join(SOLUTION_PATH, 'solution_meta.json'), 'w') as f:
+        json.dump(meta, f, indent=2)
+    print(f"  solution_meta.json saved: {w}x{h}")
 
     eval_result = board.evaluate_solution(best_solution)
     print(f"\nSolution evaluation:")

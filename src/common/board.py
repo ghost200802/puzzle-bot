@@ -352,7 +352,7 @@ def build_from_corner(ps, start_piece_id, edge_length,
 
             if border_done:
                 pct = int(longest * 100 / total)
-                threshold = (pct // 5) * 5
+                threshold = (pct // 20) * 20
                 if threshold > last_milestone_pct and threshold > 0:
                     last_milestone_pct = threshold
                     print(f"  *** Milestone {threshold}%: {longest}/{total} at iter {iteration} ***")

@@ -16,6 +16,8 @@ from common.config import DEDUPED_DIR, SOLUTION_DIR
 from solve_display import generate_assembly_png, compute_piece_transforms
 from common import board as board_mod
 
+OUTPUT_ROOT = os.environ.get('PUZZLE_OUTPUT_ROOT', '')
+
 MAX_ASSEMBLY_LONG_SIDE = 2000
 
 
@@ -284,28 +286,54 @@ class TargetMatcher:
 
         print("\n--- Phase 2: Align Target to Assembly ---")
         ah, aw = self._assembly_img.shape[:2]
-        content_x2 = int(self._grid_offset_x + self.pw * self._cell_w)
-        content_y2 = int(self._grid_offset_y + self.ph * self._cell_h)
-        content_w = content_x2 - int(self._grid_offset_x)
-        content_h = content_y2 - int(self._grid_offset_y)
+        content_w = int(self.pw * self._cell_w)
+        content_h = int(self.ph * self._cell_h)
 
         corners = _detect_puzzle_rect(self.target_raw)
 
         if corners is not None:
             print(f"  Detected target corners: {corners.tolist()}")
-            dst = np.array([
-                [0, 0],
-                [content_w - 1, 0],
-                [content_w - 1, content_h - 1],
-                [0, content_h - 1],
-            ], dtype=np.float32)
-            M = cv2.getPerspectiveTransform(corners, dst)
-            target_rect = cv2.warpPerspective(self.target_raw, M, (content_w, content_h))
+
+            w_top = np.linalg.norm(corners[1] - corners[0])
+            w_bot = np.linalg.norm(corners[2] - corners[3])
+            h_left = np.linalg.norm(corners[3] - corners[0])
+            h_right = np.linalg.norm(corners[2] - corners[1])
+            det_w = (w_top + w_bot) / 2
+            det_h = (h_left + h_right) / 2
+
+            grid_aspect = content_w / content_h if content_h > 0 else 1.0
+            det_aspect = det_w / det_h if det_h > 0 else 1.0
+            transposed_aspect = 1.0 / det_aspect if det_aspect > 0 else 1.0
+
+            if abs(det_aspect - grid_aspect) <= abs(transposed_aspect - grid_aspect):
+                dst = np.array([
+                    [0, 0],
+                    [content_w - 1, 0],
+                    [content_w - 1, content_h - 1],
+                    [0, content_h - 1],
+                ], dtype=np.float32)
+                M = cv2.getPerspectiveTransform(corners, dst)
+                target_rect = cv2.warpPerspective(self.target_raw, M, (content_w, content_h))
+                base_rotation = 0
+                print(f"  Aspect match: direct ({det_aspect:.2f} vs grid {grid_aspect:.2f})")
+            else:
+                dst = np.array([
+                    [0, 0],
+                    [content_h - 1, 0],
+                    [content_h - 1, content_w - 1],
+                    [0, content_w - 1],
+                ], dtype=np.float32)
+                M = cv2.getPerspectiveTransform(corners, dst)
+                target_warped = cv2.warpPerspective(self.target_raw, M, (content_h, content_w))
+                target_rect = cv2.rotate(target_warped, cv2.ROTATE_90_CLOCKWISE)
+                base_rotation = 1
+                print(f"  Aspect match: rotated 90° ({det_aspect:.2f} vs grid {grid_aspect:.2f})")
         else:
             print("  No puzzle boundary detected, using simple resize")
             target_rect = cv2.resize(self.target_raw, (content_w, content_h))
+            base_rotation = 0
 
-        target_rect_rotated = cv2.rotate(target_rect, cv2.ROTATE_180)
+        target_rect_180 = cv2.rotate(target_rect, cv2.ROTATE_180)
 
         ox = int(self._grid_offset_x)
         oy = int(self._grid_offset_y)
@@ -314,19 +342,19 @@ class TargetMatcher:
         rh, rw = region.shape[:2]
 
         ncc_normal = _ncc_score(region, target_rect[:rh, :rw])
-        ncc_rotated = _ncc_score(region, target_rect_rotated[:rh, :rw])
+        ncc_rotated = _ncc_score(region, target_rect_180[:rh, :rw])
 
-        print(f"  Normal NCC: {ncc_normal:.4f}")
-        print(f"  Rotated180 NCC: {ncc_rotated:.4f}")
+        print(f"  NCC 0°: {ncc_normal:.4f}")
+        print(f"  NCC 180°: {ncc_rotated:.4f}")
 
         if ncc_rotated > ncc_normal:
-            chosen = target_rect_rotated
-            self.best_rotation = 2
-            print(f"  Using 180-degree rotation")
+            chosen = target_rect_180
+            self.best_rotation = base_rotation + 2
+            print(f"  Using 180° flip (rotation={self.best_rotation})")
         else:
             chosen = target_rect
-            self.best_rotation = 0
-            print(f"  Using normal orientation")
+            self.best_rotation = base_rotation
+            print(f"  Using normal orientation (rotation={self.best_rotation})")
 
         canvas = np.full((ah, aw, 3), 255, dtype=np.uint8)
         if oy + ch <= ah and ox + cw <= aw:
@@ -817,28 +845,43 @@ def match_target(target_image_path, solution, deduped_dir, output_dir,
 
 
 def main():
+    global OUTPUT_ROOT
+
     parser = argparse.ArgumentParser(description='Match puzzle solution against target image')
     parser.add_argument('--target', required=True, help='Path to target image')
-    parser.add_argument('--solution', required=True, help='Path to solution directory')
-    parser.add_argument('--output', default=None, help='Output directory for results')
-    parser.add_argument('--output-root', default=None, help='Root output directory')
+    parser.add_argument('--solution', default=None,
+                        help='Path to solution directory (default: OUTPUT_ROOT/6_solution)')
+    parser.add_argument('-o', '--output-root', default=OUTPUT_ROOT,
+                        help='Root output directory')
     parser.add_argument('--refine-threshold', type=float, default=0.7)
     args = parser.parse_args()
+
+    output_root = args.output_root
+    if not output_root:
+        print("ERROR: output dir not set. Use -o or set PUZZLE_OUTPUT_ROOT env var.")
+        sys.exit(1)
+    output_root = os.path.abspath(output_root)
+    os.environ['PUZZLE_OUTPUT_ROOT'] = output_root
+    OUTPUT_ROOT = output_root
+
+    solution_dir = args.solution or os.path.join(output_root, SOLUTION_DIR)
+    if not os.path.isdir(solution_dir):
+        print(f"ERROR: Solution directory not found: {solution_dir}")
+        sys.exit(1)
 
     print("=" * 60)
     print("Target Image Matching")
     print("=" * 60)
 
-    pw, ph, placed = load_solution(args.solution)
+    pw, ph, placed = load_solution(solution_dir)
     print(f"Solution: {pw}x{ph}, {len(placed)} placed pieces")
 
-    output_dir = args.output or os.path.dirname(args.solution)
     matcher = TargetMatcher(
         target_image_path=args.target,
         pw=pw, ph=ph,
         placed=placed,
-        output_dir=output_dir,
-        output_root=args.output_root,
+        output_dir=output_root,
+        output_root=output_root,
     )
     matcher.run(refine_threshold=args.refine_threshold)
 

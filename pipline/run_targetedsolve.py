@@ -22,8 +22,8 @@ from run_matchtarget import (
     _histogram_match_cdf, TargetMatcher,
 )
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
+OUTPUT_ROOT = os.environ.get('PUZZLE_OUTPUT_ROOT', '')
+DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
 
 ERODE_PX = 5
 NCC_ACCEPT = 0.8
@@ -979,15 +979,26 @@ class TargetedSolver:
 
 
 def main():
+    global OUTPUT_ROOT, DEDUPED_PATH
+
     parser = argparse.ArgumentParser(description='Targeted puzzle solver using target image NCC')
     parser.add_argument('--target', default=None, help='Path to target image (optional if target_aligned.png exists)')
     parser.add_argument('--solution', required=True, help='Path to solution directory')
-    parser.add_argument('--output-root', default=None, help='Root output directory')
+    parser.add_argument('-o', '--output-root', default=OUTPUT_ROOT,
+                        help='Root output directory')
     parser.add_argument('--threshold', type=float, default=NCC_ACCEPT)
     args = parser.parse_args()
 
-    output_root = args.output_root or os.path.join(os.path.dirname(args.solution), '..', '..')
+    output_root = args.output_root
+
+    if not output_root:
+        print("ERROR: output dir not set. Use -o or set PUZZLE_OUTPUT_ROOT env var.")
+        sys.exit(1)
     output_root = os.path.abspath(output_root)
+    os.environ['PUZZLE_OUTPUT_ROOT'] = output_root
+
+    OUTPUT_ROOT = output_root
+    DEDUPED_PATH = os.path.join(OUTPUT_ROOT, DEDUPED_DIR)
 
     solver = TargetedSolver(
         target_image_path=args.target,
