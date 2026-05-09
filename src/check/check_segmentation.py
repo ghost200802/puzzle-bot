@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(_here, '..'))
 from common.config import PIECE_BMP_DIR, PHONE_TARGET_PIECE_SIZE
 from common.find_islands import save_island_as_bmp
 
-INPUT_DIR = os.path.join(_here, '..', '..', 'input', 'puzzles')
+INPUT_DIR = os.path.join(_here, '..', '..', 'input', 'puzzles', 'pieces')
 OUTPUT_DIR = os.path.join(_here, '..', '..', 'output', 'puzzle_new')
 BMP_DIR_NAME = PIECE_BMP_DIR
 

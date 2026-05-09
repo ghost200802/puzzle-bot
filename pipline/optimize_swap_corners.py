@@ -6,74 +6,21 @@ import heapq
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-from common.config import DEDUPED_DIR, CONNECTIVITY_DIR, SOLUTION_DIR
 from common.board import Board, OPPOSITE, TOP, RIGHT, BOTTOM, LEFT
 from common import output as board_output
 from solve_display import generate_assembly_png
 
+from config import get_deduped_path, get_connectivity_path, get_solution_path
+from solver_utils import load_connectivity_and_ncc, get_oriented_cost, ORI_CHARS
+
 OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
-CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, CONNECTIVITY_DIR)
-SOLUTION_PATH = os.path.join(OUTPUT_DIR, SOLUTION_DIR)
-
-ORI_CHARS = ['^', '>', 'v', '<']
-
-
-def load_ps():
-    connectivity_file = os.path.join(CONNECTIVITY_PATH, 'connectivity.json')
-    ncc_report_file = os.path.join(CONNECTIVITY_PATH, 'texture_verify_report.json')
-
-    with open(connectivity_file, 'r') as f:
-        connectivity_raw = json.load(f)
-
-    ps_raw = {}
-    for pid_str, fits_list in connectivity_raw.items():
-        pid = int(pid_str)
-        ps_raw[pid] = [[], [], [], []]
-        for i in range(4):
-            for m in fits_list[i]:
-                ps_raw[pid][i].append((m['pid'], m['si'], m['error']))
-
-    ncc_lookup = {}
-    if os.path.exists(ncc_report_file):
-        with open(ncc_report_file, 'r') as f:
-            report = json.load(f)
-        for pid_str, sides in report.items():
-            pid = int(pid_str)
-            for si, matches in enumerate(sides):
-                for m in matches:
-                    key = (pid, si, m['pid'], m['si'])
-                    ncc_lookup[key] = {'ncc': m['ncc'], 'reject': m.get('reject', False)}
-
-    ps_ncc = {}
-    for pid, sides in ps_raw.items():
-        ps_ncc[pid] = [[], [], [], []]
-        for si in range(4):
-            ncc_list = []
-            fb_list = []
-            for other_pid, other_si, error in sides[si]:
-                key = (pid, si, other_pid, other_si)
-                rev_key = (other_pid, other_si, pid, si)
-                info = ncc_lookup.get(key) or ncc_lookup.get(rev_key)
-                if info and not info['reject'] and info['ncc'] > 0:
-                    composite = error / (info['ncc'] * 1000.0)
-                    ncc_list.append((other_pid, other_si, composite))
-                else:
-                    fb_list.append((other_pid, other_si, error))
-            ncc_list.sort(key=lambda x: x[2])
-            fb_list.sort(key=lambda x: x[2])
-            ps_ncc[pid][si] = ncc_list + fb_list
-
-    return ps_raw, ps_ncc
+DEDUPED_PATH = get_deduped_path()
+CONNECTIVITY_PATH = get_connectivity_path()
+SOLUTION_PATH = get_solution_path()
 
 
 def get_cost(ps, pid_a, ori_a, pid_b, ori_b, direction):
-    a_side = (direction - ori_a) % 4
-    b_side = (OPPOSITE[direction] - ori_b) % 4
-    for n_pid, n_side, error in ps.get(pid_a, [[], [], [], []])[a_side]:
-        if n_pid == pid_b and n_side == b_side:
-            return error
-    return None
+    return get_oriented_cost(ps, pid_a, ori_a, pid_b, ori_b, direction)
 
 
 def solve_tsp(ps, start_pid, start_ori, end_pid, end_ori, interior, direction):
@@ -171,7 +118,7 @@ def main():
     print("Full Border Re-optimization with swapped corners 70<->127")
     print("=" * 60)
 
-    ps_raw, ps_ncc = load_ps()
+    ps_raw, ps_ncc = load_connectivity_and_ncc(CONNECTIVITY_PATH)
 
     TL = (134, 2)
     TR = (127, 1)

@@ -6,71 +6,12 @@ import heapq
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-from common.config import CONNECTIVITY_DIR, SOLUTION_DIR
 from common.board import OPPOSITE, TOP, RIGHT, BOTTOM, LEFT
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, CONNECTIVITY_DIR)
+from config import get_connectivity_path
+from solver_utils import load_connectivity_and_ncc, get_oriented_cost, ORI_MAP, ORI_CHARS
 
-ORI_MAP = {'^': 0, '>': 1, 'v': 2, '<': 3}
-ORI_CHARS = ['^', '>', 'v', '<']
-
-
-def load_ps():
-    connectivity_file = os.path.join(CONNECTIVITY_PATH, 'connectivity.json')
-    ncc_report_file = os.path.join(CONNECTIVITY_PATH, 'texture_verify_report.json')
-
-    with open(connectivity_file, 'r') as f:
-        connectivity_raw = json.load(f)
-
-    ps_raw = {}
-    for pid_str, fits_list in connectivity_raw.items():
-        pid = int(pid_str)
-        ps_raw[pid] = [[], [], [], []]
-        for i in range(4):
-            for m in fits_list[i]:
-                ps_raw[pid][i].append((m['pid'], m['si'], m['error']))
-
-    ncc_lookup = {}
-    if os.path.exists(ncc_report_file):
-        with open(ncc_report_file, 'r') as f:
-            report = json.load(f)
-        for pid_str, sides in report.items():
-            pid = int(pid_str)
-            for si, matches in enumerate(sides):
-                for m in matches:
-                    key = (pid, si, m['pid'], m['si'])
-                    ncc_lookup[key] = {'ncc': m['ncc'], 'reject': m.get('reject', False)}
-
-    ps_ncc = {}
-    for pid, sides in ps_raw.items():
-        ps_ncc[pid] = [[], [], [], []]
-        for si in range(4):
-            ncc_list = []
-            fb_list = []
-            for other_pid, other_si, error in sides[si]:
-                key = (pid, si, other_pid, other_si)
-                rev_key = (other_pid, other_si, pid, si)
-                info = ncc_lookup.get(key) or ncc_lookup.get(rev_key)
-                if info and not info['reject'] and info['ncc'] > 0:
-                    composite = error / (info['ncc'] * 1000.0)
-                    ncc_list.append((other_pid, other_si, composite))
-                else:
-                    fb_list.append((other_pid, other_si, error))
-            ncc_list.sort(key=lambda x: x[2])
-            fb_list.sort(key=lambda x: x[2])
-            ps_ncc[pid][si] = ncc_list + fb_list
-
-    return ps_raw, ps_ncc
-
-
-def get_cost(ps, pid_a, ori_a, pid_b, ori_b, direction):
-    a_side = (direction - ori_a) % 4
-    b_side = (OPPOSITE[direction] - ori_b) % 4
-    for n_pid, n_side, error in ps.get(pid_a, [[], [], [], []])[a_side]:
-        if n_pid == pid_b and n_side == b_side:
-            return error
-    return None
+CONNECTIVITY_PATH = get_connectivity_path()
 
 
 def solve_tsp(ps, corner_top, corner_bot, interior, direction, constraint_fn=None, label=""):
@@ -79,12 +20,12 @@ def solve_tsp(ps, corner_top, corner_bot, interior, direction, constraint_fn=Non
 
     cost_from_start = []
     for i, (_, _, pid, ori) in enumerate(interior):
-        c = get_cost(ps, corner_top[2], corner_top[3], pid, ori, direction)
+        c = get_oriented_cost(ps, corner_top[2], corner_top[3], pid, ori, direction)
         cost_from_start.append(c if c is not None else INF)
 
     cost_to_end = []
     for i, (_, _, pid, ori) in enumerate(interior):
-        c = get_cost(ps, pid, ori, corner_bot[2], corner_bot[3], direction)
+        c = get_oriented_cost(ps, pid, ori, corner_bot[2], corner_bot[3], direction)
         cost_to_end.append(c if c is not None else INF)
 
     cost_between = [[INF] * n for _ in range(n)]
@@ -92,8 +33,8 @@ def solve_tsp(ps, corner_top, corner_bot, interior, direction, constraint_fn=Non
         for j in range(n):
             if i == j:
                 continue
-            c = get_cost(ps, interior[i][2], interior[i][3],
-                         interior[j][2], interior[j][3], direction)
+            c = get_oriented_cost(ps, interior[i][2], interior[i][3],
+                                  interior[j][2], interior[j][3], direction)
             cost_between[i][j] = c if c is not None else INF
 
     full_mask = (1 << n) - 1
@@ -155,15 +96,15 @@ def print_path_detail(ps_raw, ps_ncc, corner_top, corner_bot, interior, path, di
     total_raw = 0
     for idx in path:
         pid, ori = interior[idx][2], interior[idx][3]
-        c_raw = get_cost(ps_raw, prev_pid, prev_ori, pid, ori, direction)
-        c_ncc = get_cost(ps_ncc, prev_pid, prev_ori, pid, ori, direction)
+        c_raw = get_oriented_cost(ps_raw, prev_pid, prev_ori, pid, ori, direction)
+        c_ncc = get_oriented_cost(ps_ncc, prev_pid, prev_ori, pid, ori, direction)
         print(f"    {prev_pid}{ORI_CHARS[prev_ori]} -> {pid}{ORI_CHARS[ori]}: "
               f"RAW={c_raw}, NCC={c_ncc}")
         total_ncc += c_ncc if c_ncc else 0
         total_raw += c_raw if c_raw else 0
         prev_pid, prev_ori = pid, ori
-    c_raw = get_cost(ps_raw, prev_pid, prev_ori, corner_bot[2], corner_bot[3], direction)
-    c_ncc = get_cost(ps_ncc, prev_pid, prev_ori, corner_bot[2], corner_bot[3], direction)
+    c_raw = get_oriented_cost(ps_raw, prev_pid, prev_ori, corner_bot[2], corner_bot[3], direction)
+    c_ncc = get_oriented_cost(ps_ncc, prev_pid, prev_ori, corner_bot[2], corner_bot[3], direction)
     print(f"    {prev_pid}{ORI_CHARS[prev_ori]} -> {corner_bot[2]}{ORI_CHARS[corner_bot[3]]}: "
           f"RAW={c_raw}, NCC={c_ncc}")
     total_ncc += c_ncc if c_ncc else 0
@@ -176,7 +117,7 @@ def main():
     print("LEFT Edge: Find NCC-optimal arrangement")
     print("=" * 60)
 
-    ps_raw, ps_ncc = load_ps()
+    ps_raw, ps_ncc = load_connectivity_and_ncc(CONNECTIVITY_PATH)
 
     corner_top = (0, 0, 134, ORI_MAP['v'])
     corner_bot = (0, 9, 127, ORI_MAP['>'])
@@ -213,7 +154,7 @@ def main():
             if i == j:
                 row += f" {'---':>8}"
                 continue
-            c = get_cost(ps_ncc, pid_a, ori_a, pid_b, ori_b, direction)
+            c = get_oriented_cost(ps_ncc, pid_a, ori_a, pid_b, ori_b, direction)
             if c is not None:
                 row += f" {c:>8.4f}"
             else:

@@ -10,11 +10,15 @@ sys.path.insert(0, os.path.join(_here, '..', 'src'))
 import importlib
 import common.texture_verify as tv
 importlib.reload(tv)
-from common.texture_verify import load_side_data, _resample_polyline, _resample_by_chord, N_SAMPLES
+from common.texture_verify import (
+    load_side_data, _resample_polyline, _resample_by_chord, N_SAMPLES
+)
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, '3_vector')
-CHECK_PATH = os.path.join(OUTPUT_DIR, 'check')
+from config import get_vector_path, get_check_path
+from debug_utils import load_fonts
+
+DEDUPED_PATH = get_vector_path()
+CHECK_PATH = get_check_path()
 
 PID_A, SI_A = 4, 3
 PID_B, SI_B = 137, 3
@@ -52,17 +56,14 @@ def _transform_edge(src_verts, tgt_verts):
 
 transformed_bf = _transform_edge(verts_bf, verts_a)
 
-# Arc-length resample both
 arc_a = _resample_polyline(verts_a, N_SAMPLES)
 arc_bf = _resample_polyline(verts_bf, N_SAMPLES)
 arc_bf_aligned = _transform_edge(arc_bf, verts_a)
 
-# Chord resample both
 chord_a = _resample_by_chord(verts_a, N_SAMPLES)
 chord_bf = _resample_by_chord(verts_bf, N_SAMPLES)
 chord_bf_aligned = _transform_edge(chord_bf, verts_a)
 
-# Compute distances
 print("Arc-length sampling distances (after alignment):")
 arc_dists = [np.linalg.norm(arc_a[i] - arc_bf_aligned[i]) for i in range(N_SAMPLES)]
 for i in range(N_SAMPLES):
@@ -75,15 +76,10 @@ for i in range(N_SAMPLES):
     print(f"  [{i:2d}] dist={chord_dists[i]:.1f}")
 print(f"  Mean: {np.mean(chord_dists):.1f}, Median: {np.median(chord_dists):.1f}, Max: {np.max(chord_dists):.1f}")
 
-# Visualization: overlay both edges, show sample points and correspondence lines
-try:
-    font = ImageFont.truetype("arial.ttf", 14)
-    small_font = ImageFont.truetype("arial.ttf", 11)
-    title_font = ImageFont.truetype("arialbd.ttf", 20)
-except:
-    font = ImageFont.load_default()
-    small_font = font
-    title_font = font
+fonts = load_fonts(title_size=20, idx_size=11)
+font = fonts['title']
+small_font = fonts['idx']
+title_font = fonts['title']
 
 for method, pts_a, pts_bf_al, dists in [
     ("arc-length", arc_a, arc_bf_aligned, arc_dists),
@@ -108,7 +104,6 @@ for method, pts_a, pts_bf_al, dists in [
     def tc(x, y):
         return ((x - min_x) * scale + margin, (y - min_y) * scale + margin + 30)
 
-    # Draw full edges
     edge_a_pts = [tc(v[0], v[1]) for v in verts_a[::5]]
     edge_b_pts = [tc(v[0], v[1]) for v in transformed_bf[::5]]
     if len(edge_a_pts) >= 2:
@@ -116,7 +111,6 @@ for method, pts_a, pts_bf_al, dists in [
     if len(edge_b_pts) >= 2:
         draw.line(edge_b_pts, fill=(200, 0, 0, 100), width=2)
 
-    # Draw correspondence lines and points
     for i in range(N_SAMPLES):
         pa = tc(pts_a[i][0], pts_a[i][1])
         pb = tc(pts_bf_al[i][0], pts_bf_al[i][1])
@@ -140,7 +134,6 @@ for method, pts_a, pts_bf_al, dists in [
         draw.ellipse([pb[0]-r_b, pb[1]-r_b, pb[0]+r_b, pb[1]+r_b],
                      fill=(200, 0, 0, 255), outline=(0, 0, 0, 255))
 
-    # Legend
     ly = ch + 10
     draw.text((10, ly), "Blue=A  Red=B(flipped,aligned)", fill=(0,0,0), font=font)
     draw.text((350, ly), "Green=<20px  Orange=<50px  Red=>50px", fill=(0,0,0), font=font)

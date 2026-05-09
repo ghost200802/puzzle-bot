@@ -7,66 +7,15 @@ import time
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-from common.config import DEDUPED_DIR, CONNECTIVITY_DIR
 from common.board import (Board, OPPOSITE, TOP, RIGHT, BOTTOM, LEFT,
                            _orient_start_corner_to_top_left, _get_combined_cost)
 
+from config import get_deduped_path, get_connectivity_path
+from solver_utils import load_connectivity_and_ncc
+
 OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
-CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, CONNECTIVITY_DIR)
-
-connectivity_file = os.path.join(CONNECTIVITY_PATH, 'connectivity.json')
-ncc_report_file = os.path.join(CONNECTIVITY_PATH, 'texture_verify_report.json')
-
-
-def load_connectivity_raw(connectivity_file):
-    with open(connectivity_file, 'r') as f:
-        connectivity = json.load(f)
-    ps = {}
-    for pid_str, fits_list in connectivity.items():
-        pid = int(pid_str)
-        ps[pid] = [[], [], [], []]
-        for i in range(4):
-            for m in fits_list[i]:
-                ps[pid][i].append((m['pid'], m['si'], m['error']))
-    return ps
-
-
-def load_ncc_lookup(report_path):
-    if not os.path.exists(report_path):
-        return {}
-    with open(report_path, 'r') as f:
-        report = json.load(f)
-    lookup = {}
-    for pid_str, sides in report.items():
-        pid = int(pid_str)
-        for si, matches in enumerate(sides):
-            for m in matches:
-                key = (pid, si, m['pid'], m['si'])
-                lookup[key] = {'ncc': m['ncc'], 'reject': m.get('reject', False)}
-    return lookup
-
-
-def build_ncc_ps(ps_raw, ncc_lookup):
-    ps = {}
-    for pid, sides in ps_raw.items():
-        ps[pid] = [[], [], [], []]
-        for si in range(4):
-            ncc_list = []
-            fb_list = []
-            for other_pid, other_si, error in sides[si]:
-                key = (pid, si, other_pid, other_si)
-                rev_key = (other_pid, other_si, pid, si)
-                info = ncc_lookup.get(key) or ncc_lookup.get(rev_key)
-                if info and not info['reject'] and info['ncc'] > 0:
-                    composite = error / (info['ncc'] * 1000.0)
-                    ncc_list.append((other_pid, other_si, composite))
-                else:
-                    fb_list.append((other_pid, other_si, error))
-            ncc_list.sort(key=lambda x: x[2])
-            fb_list.sort(key=lambda x: x[2])
-            ps[pid][si] = ncc_list + fb_list
-    return ps
+DEDUPED_PATH = get_deduped_path()
+CONNECTIVITY_PATH = get_connectivity_path()
 
 
 def parse_grid_file(filepath, ps):
@@ -102,7 +51,6 @@ def parse_grid_file(filepath, ps):
 def debug_continue_from_board(board, ps, ps_fallback, max_iter=5000):
     pw, ph = board.width, board.height
     total = pw * ph
-    edge_length = 2 * (pw + ph) - 4
 
     corner_cell = board.get(0, 0)
     start_piece_id = corner_cell[0]
@@ -247,9 +195,7 @@ def debug_continue_from_board(board, ps, ps_fallback, max_iter=5000):
 
 
 def main():
-    ps_raw = load_connectivity_raw(connectivity_file)
-    ncc_lookup = load_ncc_lookup(ncc_report_file)
-    ps_ncc = build_ncc_ps(ps_raw, ncc_lookup)
+    ps_raw, ps_ncc = load_connectivity_and_ncc(CONNECTIVITY_PATH)
 
     grid_file = os.path.join(OUTPUT_DIR, '6_solution', 'milestone', 'pct45', 'solution_grid.txt')
     print(f"Loading board from {grid_file}")

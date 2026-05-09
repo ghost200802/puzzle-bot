@@ -24,11 +24,13 @@ from show_connectivity import (
     _load_piece_data, _load_piece_images, _SIDE_NAMES
 )
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, '3_vector')
-COLOR_PATH = os.path.join(OUTPUT_DIR, '2_piece_colors')
-CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, '5_connectivity')
-CHECK_PATH = os.path.join(OUTPUT_DIR, 'check')
+from config import get_vector_path, get_color_path, get_connectivity_path, get_check_path
+from debug_utils import load_fonts
+
+DEDUPED_PATH = get_vector_path()
+COLOR_PATH = get_color_path()
+CONNECTIVITY_PATH = get_connectivity_path()
+CHECK_PATH = get_check_path()
 
 PID_A, SI_A = 4, 3
 PID_B, SI_B = 137, 3
@@ -154,31 +156,17 @@ def _compute_corresponding_band_points(side_data_a, side_data_b, color_image_b, 
     return points
 
 
-def _transform_pt(x, y, src_mid, src_theta, tgt_mid, tgt_theta):
-    rot_angle = tgt_theta + math.pi - src_theta
-    cos_r = math.cos(rot_angle)
-    sin_r = math.sin(rot_angle)
-    dx = x - src_mid[0]
-    dy = y - src_mid[1]
-    fx = dx * cos_r - dy * sin_r + tgt_mid[0]
-    fy = dx * sin_r + dy * cos_r + tgt_mid[1]
-    return fx, fy
-
-
 def main():
+    fonts = load_fonts(title_size=28, idx_size=11)
     try:
-        fonts = {
-            'title': ImageFont.truetype("arialbd.ttf", 28),
-            'section': ImageFont.truetype("arialbd.ttf", 22),
-            'label': ImageFont.truetype("arial.ttf", 16),
-            'small': ImageFont.truetype("arial.ttf", 14),
-            'tiny': ImageFont.truetype("arial.ttf", 12),
-            'metric': ImageFont.truetype("arialbd.ttf", 18),
-            'idx_font': ImageFont.truetype("arialbd.ttf", 11),
-        }
+        fonts['section'] = ImageFont.truetype("arialbd.ttf", 22)
+        fonts['label'] = ImageFont.truetype("arial.ttf", 16)
+        fonts['small'] = ImageFont.truetype("arial.ttf", 14)
+        fonts['tiny'] = ImageFont.truetype("arial.ttf", 12)
+        fonts['metric'] = ImageFont.truetype("arialbd.ttf", 18)
     except Exception:
-        default = ImageFont.load_default()
-        fonts = {k: default for k in ['title', 'section', 'label', 'small', 'tiny', 'metric', 'idx_font']}
+        for k in ['section', 'label', 'small', 'tiny', 'metric']:
+            fonts[k] = ImageFont.load_default()
 
     print("Loading data...")
     piece_data = _load_piece_data(DEDUPED_PATH)
@@ -216,9 +204,6 @@ def main():
     print(f"Color diff: {color_diff_mean:.2f}")
     print(f"Grad score: {grad_score}")
 
-    # ================================================================
-    # LAYOUT
-    # ================================================================
     canvas_w = 2000
     header_h = 50
 
@@ -241,9 +226,6 @@ def main():
               f"Piece {PID_B}[{SI_B}] ({_SIDE_NAMES[SI_B]})",
               fill=(0, 0, 0, 255), font=fonts['title'])
 
-    # ================================================================
-    # Section 1: Two pieces side by side with sample points on color images
-    # ================================================================
     y = header_h + gap
     draw.rectangle([10, y, canvas_w - 10, y + section_hdr],
                    fill=(50, 50, 110, 255))
@@ -320,7 +302,7 @@ def main():
                               fill=(r, g, b_col, 255), outline=(0, 0, 0, 255))
             if idx % 3 == 0:
                 cell_draw.text((bx + dot_r + 1, by - 6), str(idx),
-                               fill=(0, 0, 0, 200), font=fonts['idx_font'])
+                               fill=(0, 0, 0, 200), font=fonts['idx'])
 
         band_line = [(bx, by) for bx, by, _ in valid_pts]
         if len(band_line) >= 2:
@@ -330,9 +312,6 @@ def main():
 
     y += piece_strip_h + gap
 
-    # ================================================================
-    # Section 2: Gray + Color plot
-    # ================================================================
     draw.rectangle([10, y, canvas_w - 10, y + section_hdr],
                    fill=(50, 50, 110, 255))
     draw.text((20, y + 2),
@@ -408,9 +387,6 @@ def main():
 
     y += plot_h + gap
 
-    # ================================================================
-    # Section 3: Color strip comparison
-    # ================================================================
     draw.rectangle([10, y, canvas_w - 10, y + section_hdr],
                    fill=(50, 50, 110, 255))
     draw.text((20, y + 2),
@@ -444,9 +420,6 @@ def main():
 
     y += 2 * (strip_h + label_h + 8) + gap
 
-    # ================================================================
-    # Section 4: Metrics
-    # ================================================================
     draw.rectangle([10, y, canvas_w - 10, y + section_hdr],
                    fill=(50, 50, 110, 255))
     draw.text((20, y + 2),

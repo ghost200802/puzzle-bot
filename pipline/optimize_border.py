@@ -1,57 +1,23 @@
 import os
 import sys
-import json
 import heapq
 
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-from common.config import DEDUPED_DIR, CONNECTIVITY_DIR, SOLUTION_DIR
 from common.board import Board, OPPOSITE, TOP, RIGHT, BOTTOM, LEFT
 from common import output as board_output
 from solve_display import generate_assembly_png
 
+from config import get_deduped_path, get_connectivity_path, get_solution_path
+from solver_utils import (parse_grid, load_connectivity_and_ncc,
+                           get_oriented_cost, ORI_MAP, ORI_CHARS)
+
 OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, DEDUPED_DIR)
-CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, CONNECTIVITY_DIR)
-SOLUTION_PATH = os.path.join(OUTPUT_DIR, SOLUTION_DIR)
+DEDUPED_PATH = get_deduped_path()
+CONNECTIVITY_PATH = get_connectivity_path()
+SOLUTION_PATH = get_solution_path()
 BORDER_DIR = os.path.join(SOLUTION_PATH, 'milestone', 'border')
-
-NCC_PRIORITY_WEIGHT = 1000.0
-ORI_MAP = {'^': 0, '>': 1, 'v': 2, '<': 3}
-ORI_CHARS = ['^', '>', 'v', '<']
-
-
-def parse_grid(grid_path):
-    with open(grid_path, 'r') as f:
-        content = f.read()
-
-    grid = {}
-    y = 0
-    for line in content.strip().split('\n'):
-        line = line.strip()
-        if line.startswith('---') or not line:
-            continue
-        tokens = line.split()
-        x = 0
-        for token in tokens:
-            if token == '-':
-                x += 1
-                continue
-            if len(token) >= 2:
-                ori_char = token[-1]
-                pid_str = token[:-1]
-                if ori_char in ORI_MAP:
-                    try:
-                        grid[(x, y)] = (int(pid_str), ORI_MAP[ori_char])
-                    except ValueError:
-                        pass
-            x += 1
-        y += 1
-
-    width = max(k[0] for k in grid) + 1 if grid else 0
-    height = max(k[1] for k in grid) + 1 if grid else 0
-    return width, height, grid
 
 
 def extract_edges(grid, width, height):
@@ -84,22 +50,12 @@ def extract_edges(grid, width, height):
     return edges
 
 
-def get_connection_cost(ps, pid_a, ori_a, pid_b, ori_b, direction):
-    a_side = (direction - ori_a) % 4
-    b_side = (OPPOSITE[direction] - ori_b) % 4
-
-    for n_pid, n_side, error in ps.get(pid_a, [[], [], [], []])[a_side]:
-        if n_pid == pid_b and n_side == b_side:
-            return error
-    return None
-
-
 def compute_edge_cost(ps, pieces, direction):
     total = 0.0
     for i in range(len(pieces) - 1):
         _, _, pid_a, ori_a = pieces[i]
         _, _, pid_b, ori_b = pieces[i + 1]
-        cost = get_connection_cost(ps, pid_a, ori_a, pid_b, ori_b, direction)
+        cost = get_oriented_cost(ps, pid_a, ori_a, pid_b, ori_b, direction)
         if cost is None:
             return float('inf')
         total += cost
@@ -124,12 +80,12 @@ def optimize_edge(ps, edge_info):
 
     cost_from_start = []
     for i, (_, _, pid, ori) in enumerate(interior):
-        c = get_connection_cost(ps, start[2], start[3], pid, ori, direction)
+        c = get_oriented_cost(ps, start[2], start[3], pid, ori, direction)
         cost_from_start.append(c if c is not None else INF)
 
     cost_to_end = []
     for i, (_, _, pid, ori) in enumerate(interior):
-        c = get_connection_cost(ps, pid, ori, end[2], end[3], direction)
+        c = get_oriented_cost(ps, pid, ori, end[2], end[3], direction)
         cost_to_end.append(c if c is not None else INF)
 
     cost_between = [[INF] * n for _ in range(n)]
@@ -137,8 +93,8 @@ def optimize_edge(ps, edge_info):
         for j in range(n):
             if i == j:
                 continue
-            c = get_connection_cost(ps, interior[i][2], interior[i][3],
-                                    interior[j][2], interior[j][3], direction)
+            c = get_oriented_cost(ps, interior[i][2], interior[i][3],
+                                  interior[j][2], interior[j][3], direction)
             cost_between[i][j] = c if c is not None else INF
 
     reachable_from_start = sum(1 for c in cost_from_start if c < INF)
@@ -208,58 +164,13 @@ def optimize_edge(ps, edge_info):
     return result, best_cost
 
 
-def load_ps(connectivity_file, ncc_report_file):
-    with open(connectivity_file, 'r') as f:
-        connectivity_raw = json.load(f)
-
-    ps_raw = {}
-    for pid_str, fits_list in connectivity_raw.items():
-        pid = int(pid_str)
-        ps_raw[pid] = [[], [], [], []]
-        for i in range(4):
-            for m in fits_list[i]:
-                ps_raw[pid][i].append((m['pid'], m['si'], m['error']))
-
-    ncc_lookup = {}
-    if os.path.exists(ncc_report_file):
-        with open(ncc_report_file, 'r') as f:
-            report = json.load(f)
-        for pid_str, sides in report.items():
-            pid = int(pid_str)
-            for si, matches in enumerate(sides):
-                for m in matches:
-                    key = (pid, si, m['pid'], m['si'])
-                    ncc_lookup[key] = {'ncc': m['ncc'], 'reject': m.get('reject', False)}
-
-    ps_ncc = {}
-    for pid, sides in ps_raw.items():
-        ps_ncc[pid] = [[], [], [], []]
-        for si in range(4):
-            ncc_list = []
-            fb_list = []
-            for other_pid, other_si, error in sides[si]:
-                key = (pid, si, other_pid, other_si)
-                rev_key = (other_pid, other_si, pid, si)
-                info = ncc_lookup.get(key) or ncc_lookup.get(rev_key)
-                if info and not info['reject'] and info['ncc'] > 0:
-                    composite = error / (info['ncc'] * NCC_PRIORITY_WEIGHT)
-                    ncc_list.append((other_pid, other_si, composite))
-                else:
-                    fb_list.append((other_pid, other_si, error))
-            ncc_list.sort(key=lambda x: x[2])
-            fb_list.sort(key=lambda x: x[2])
-            ps_ncc[pid][si] = ncc_list + fb_list
-
-    return ps_raw, ps_ncc
-
-
 def print_edge_detail(ps, pieces, direction, label):
     print(f"  {label}: {[f'{p[2]}{ORI_CHARS[p[3]]}' for p in pieces]}")
     total = 0.0
     for i in range(len(pieces) - 1):
         _, _, pid_a, ori_a = pieces[i]
         _, _, pid_b, ori_b = pieces[i + 1]
-        cost = get_connection_cost(ps, pid_a, ori_a, pid_b, ori_b, direction)
+        cost = get_oriented_cost(ps, pid_a, ori_a, pid_b, ori_b, direction)
         cost_str = f'{cost:.6f}' if cost is not None else 'NONE'
         print(f"    {pid_a}{ORI_CHARS[ori_a]} -> {pid_b}{ORI_CHARS[ori_b]}: {cost_str}")
         if cost is not None:
@@ -273,13 +184,11 @@ def main():
     print("=" * 60)
 
     grid_path = os.path.join(BORDER_DIR, 'solution_grid.txt')
-    connectivity_file = os.path.join(CONNECTIVITY_PATH, 'connectivity.json')
-    ncc_report_file = os.path.join(CONNECTIVITY_PATH, 'texture_verify_report.json')
 
     width, height, grid = parse_grid(grid_path)
     print(f"Grid: {width}x{height}, {len(grid)} pieces")
 
-    ps_raw, ps_ncc = load_ps(connectivity_file, ncc_report_file)
+    ps_raw, ps_ncc = load_connectivity_and_ncc(CONNECTIVITY_PATH)
 
     edges = extract_edges(grid, width, height)
 

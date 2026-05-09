@@ -5,80 +5,12 @@ import json
 _here = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_here, '..', 'src'))
 
-from common.config import CONNECTIVITY_DIR
 from common.board import Board, OPPOSITE, TOP, RIGHT, BOTTOM, LEFT
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-CONNECTIVITY_PATH = os.path.join(OUTPUT_DIR, CONNECTIVITY_DIR)
+from config import get_connectivity_path
+from solver_utils import parse_grid, load_connectivity_and_ncc
 
-ORI_MAP = {'^': 0, '>': 1, 'v': 2, '<': 3}
-
-
-def parse_grid(path):
-    grid = {}
-    y = 0
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith('---') or not line:
-                continue
-            x = 0
-            for token in line.split():
-                if token == '-':
-                    x += 1
-                    continue
-                if len(token) >= 2 and token[-1] in ORI_MAP:
-                    try:
-                        grid[(x, y)] = (int(token[:-1]), ORI_MAP[token[-1]])
-                    except ValueError:
-                        pass
-                x += 1
-            y += 1
-    return grid
-
-
-def load_ps():
-    conn_file = os.path.join(CONNECTIVITY_PATH, 'connectivity.json')
-    with open(conn_file) as f:
-        raw = json.load(f)
-    ps_raw = {}
-    for pid_str, fits in raw.items():
-        pid = int(pid_str)
-        ps_raw[pid] = [[], [], [], []]
-        for i in range(4):
-            for m in fits[i]:
-                ps_raw[pid][i].append((m['pid'], m['si'], m['error']))
-
-    ncc_file = os.path.join(CONNECTIVITY_PATH, 'texture_verify_report.json')
-    ncc_lookup = {}
-    if os.path.exists(ncc_file):
-        with open(ncc_file) as f:
-            report = json.load(f)
-        for pid_str, sides in report.items():
-            pid = int(pid_str)
-            for si, matches in enumerate(sides):
-                for m in matches:
-                    key = (pid, si, m['pid'], m['si'])
-                    ncc_lookup[key] = {'ncc': m['ncc'], 'reject': m.get('reject', False)}
-
-    ps_ncc = {}
-    for pid, sides in ps_raw.items():
-        ps_ncc[pid] = [[], [], [], []]
-        for si in range(4):
-            ncc_list, fb_list = [], []
-            for opid, osi, err in sides[si]:
-                key = (pid, si, opid, osi)
-                rev = (opid, osi, pid, si)
-                info = ncc_lookup.get(key) or ncc_lookup.get(rev)
-                if info and not info['reject'] and info['ncc'] > 0:
-                    ncc_list.append((opid, osi, err / (info['ncc'] * 1000.0)))
-                else:
-                    fb_list.append((opid, osi, err))
-            ncc_list.sort(key=lambda x: x[2])
-            fb_list.sort(key=lambda x: x[2])
-            ps_ncc[pid][si] = ncc_list + fb_list
-
-    return ps_raw, ps_ncc
+CONNECTIVITY_PATH = get_connectivity_path()
 
 
 def get_neighbor_candidates(ps, nb_pid, nb_ori, facing_us):
@@ -87,8 +19,9 @@ def get_neighbor_candidates(ps, nb_pid, nb_ori, facing_us):
 
 
 def main():
-    grid = parse_grid(r'f:\work_Puzzle_github\puzzle-bot\output\puzzle_new\6_solution\milestone\pct75\solution_grid.txt')
-    ps_raw, ps_ncc = load_ps()
+    _, _, grid = parse_grid(
+        r'f:\work_Puzzle_github\puzzle-bot\output\puzzle_new\6_solution\milestone\pct75\solution_grid.txt')
+    ps_raw, ps_ncc = load_connectivity_and_ncc(CONNECTIVITY_PATH)
 
     placed_pids = {v[0] for v in grid.values()}
     remaining = set(range(100)) - placed_pids if max(placed_pids) < 200 else set()

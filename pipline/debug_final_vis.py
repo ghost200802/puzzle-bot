@@ -21,25 +21,24 @@ from common.texture_verify import (
 )
 from show_connectivity import _load_piece_data, _get_outline
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, '3_vector')
-COLOR_PATH = os.path.join(OUTPUT_DIR, '2_piece_colors')
-CHECK_PATH = os.path.join(OUTPUT_DIR, 'check')
+from config import get_vector_path, get_color_path, get_check_path
+from debug_utils import load_fonts, transform_point
+
+DEDUPED_PATH = get_vector_path()
+COLOR_PATH = get_color_path()
+CHECK_PATH = get_check_path()
 
 PID_A, SI_A = 4, 3
 PID_B, SI_B = 137, 3
 
+fonts = load_fonts(title_size=26, idx_size=10)
 try:
-    fonts = {
-        'title': ImageFont.truetype("arialbd.ttf", 26),
-        'section': ImageFont.truetype("arialbd.ttf", 18),
-        'label': ImageFont.truetype("arial.ttf", 14),
-        'small': ImageFont.truetype("arial.ttf", 12),
-        'idx': ImageFont.truetype("arialbd.ttf", 10),
-    }
-except:
-    default = ImageFont.load_default()
-    fonts = {k: default for k in ['title', 'section', 'label', 'small', 'idx']}
+    fonts['section'] = ImageFont.truetype("arialbd.ttf", 18)
+    fonts['label'] = ImageFont.truetype("arial.ttf", 14)
+    fonts['small'] = ImageFont.truetype("arial.ttf", 12)
+except Exception:
+    for k in ['section', 'label', 'small']:
+        fonts[k] = ImageFont.load_default()
 
 side_a = load_side_data(DEDUPED_PATH, PID_A, SI_A)
 side_b = load_side_data(DEDUPED_PATH, PID_B, SI_B)
@@ -82,21 +81,9 @@ print(f"NCC={ncc:.4f}  ColorDiff={cd_mean:.2f}  Grad={grad}  Samples={n}")
 
 piece_data = _load_piece_data(DEDUPED_PATH)
 
-def tf_pt(v, sm, tm, r):
-    cos_r, sin_r = math.cos(r), math.sin(r)
-    dx = v[0] - sm[0]
-    dy = v[1] - sm[1]
-    return (dx*cos_r - dy*sin_r + tm[0], dx*sin_r + dy*cos_r + tm[1])
-
-def tf_pt_arr(v, sm, tm, r):
-    cos_r, sin_r = math.cos(r), math.sin(r)
-    dx = v[0] - sm[0]
-    dy = v[1] - sm[1]
-    return np.array([dx*cos_r - dy*sin_r + tm[0], dx*sin_r + dy*cos_r + tm[1]])
-
 outline_a = _get_outline(piece_data[PID_A])
 outline_b_raw = _get_outline(piece_data[PID_B])
-outline_b = [tf_pt(np.array(p), src_mid, tgt_mid, rot) for p in outline_b_raw]
+outline_b = [transform_point(np.array(p), src_mid, tgt_mid, rot) for p in outline_b_raw]
 
 sample_a_list = [tuple(p) for p in sample_a]
 corr_aligned_list = [tuple(p) for p in corr_aligned]
@@ -124,7 +111,6 @@ draw.text((15, 8),
           f"Piece {PID_A}[{SI_A}] + Piece {PID_B}[{SI_B}] aligned | NCC={ncc:.4f}  ColorDiff={cd_mean:.1f}  Grad={grad:.3f}",
           fill=(255, 255, 255, 255), font=fonts['title'])
 
-# Paste color images
 for pid, img_src, sides, si in [
     (PID_A, img_a, piece_data[PID_A], SI_A),
     (PID_B, img_b, piece_data[PID_B], SI_B),
@@ -183,18 +169,15 @@ for pid, img_src, sides, si in [
         py = int(tc(o_min_x, o_min_y)[1])
         canvas.paste(resized, (px, py), resized)
 
-# Draw outlines
 for outline, color in [(outline_a, (80,140,255,180)), (outline_b, (255,100,100,180))]:
     pts = [tc(x, y) for x, y in outline]
     if len(pts) >= 3:
         draw.polygon(pts, fill=None, outline=color, width=2)
 
-# Draw shared side (orange)
 side_pts = [tc(v[0], v[1]) for v in verts_a[::max(1, len(verts_a)//60)]]
 if len(side_pts) >= 2:
     draw.line(side_pts, fill=(255, 200, 0, 200), width=2)
 
-# Draw A sample points with band colors
 for i in range(N_SAMPLES):
     ax, ay = tc(sample_a[i][0], sample_a[i][1])
 
@@ -230,7 +213,6 @@ for i in range(N_SAMPLES):
         draw.line([ax-6, ay+6, ax+6, ay-6], fill=(255, 80, 80, 200), width=1)
         draw.text((ax+6, ay-9), str(i), fill=(120, 120, 120, 180), font=fonts['idx'])
 
-# Draw B correspondence points with band colors
 for i in range(N_SAMPLES):
     bx, by = tc(corr_aligned[i][0], corr_aligned[i][1])
 
@@ -242,7 +224,7 @@ for i in range(N_SAMPLES):
         tangent = _edge_tangent_at(verts_bf, corr_orig[i])
         normal = np.array([tangent[1], -tangent[0]])
         band_pos = corr_orig[i] + normal * (INNER_OFFSET + BAND_WIDTH // 2)
-        band_aligned = tf_pt_arr(band_pos, src_mid, tgt_mid, rot)
+        band_aligned = transform_point(band_pos, src_mid, tgt_mid, rot)
         bpx, bpy = tc(band_aligned[0], band_aligned[1])
         draw.ellipse([bpx-4, bpy-4, bpx+4, bpy+4], fill=(r_col, g_col, b_col, 255), outline=(255,255,255,200))
 
@@ -254,7 +236,6 @@ for i in range(N_SAMPLES):
         draw.line([bx-6, by+6, bx+6, by-6], fill=(255, 80, 80, 200), width=1)
         draw.text((bx-18, by+4), str(i), fill=(120, 120, 120, 180), font=fonts['idx'])
 
-# Info panel at bottom
 info_y = canvas_h - 65
 draw.rectangle([10, info_y, canvas_w - 10, canvas_h - 5], fill=(20, 20, 20, 230), outline=(100,100,100,255))
 info_lines = [
@@ -264,7 +245,6 @@ info_lines = [
 for j, line in enumerate(info_lines):
     draw.text((20, info_y + 5 + j * 22), line, fill=(220, 220, 220, 255), font=fonts['label'])
 
-# Gray comparison strip
 strip_y = info_y - 55
 strip_margin = 80
 strip_w = canvas_w - 2 * strip_margin

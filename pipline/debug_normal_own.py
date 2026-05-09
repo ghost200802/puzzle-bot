@@ -19,22 +19,16 @@ from common.texture_verify import (
 )
 from show_connectivity import _get_outline, _load_piece_data
 
-OUTPUT_DIR = os.path.join(_here, '..', 'output', 'puzzle_new')
-DEDUPED_PATH = os.path.join(OUTPUT_DIR, '3_vector')
-CHECK_PATH = os.path.join(OUTPUT_DIR, 'check')
+from config import get_vector_path, get_check_path
+from debug_utils import load_fonts, transform_point, rotate_vector, CanvasViewport
+
+DEDUPED_PATH = get_vector_path()
+CHECK_PATH = get_check_path()
 
 PID_A, SI_A = 4, 3
 PID_B, SI_B = 137, 3
 
-try:
-    fonts = {
-        'title': ImageFont.truetype("arialbd.ttf", 22),
-        'idx': ImageFont.truetype("arialbd.ttf", 11),
-        'tiny': ImageFont.truetype("arial.ttf", 9),
-    }
-except:
-    default = ImageFont.load_default()
-    fonts = {k: default for k in ['title', 'idx', 'tiny']}
+fonts = load_fonts(title_size=22, idx_size=11, tiny_size=9)
 
 side_a = load_side_data(DEDUPED_PATH, PID_A, SI_A)
 side_b = load_side_data(DEDUPED_PATH, PID_B, SI_B)
@@ -87,41 +81,17 @@ def compute_normals(points, piece_center, edge_vertices=None):
 normals_a = compute_normals(sample_a, side_a['piece_center'])
 normals_b_orig = compute_normals(corr_orig, side_b['piece_center'], edge_vertices=verts_bf)
 
-def tf_pt(v, sm, tm, r):
-    cos_r, sin_r = math.cos(r), math.sin(r)
-    dx = v[0] - sm[0]
-    dy = v[1] - sm[1]
-    return np.array([dx*cos_r - dy*sin_r + tm[0], dx*sin_r + dy*cos_r + tm[1]])
-
-def tf_vec(v, r):
-    cos_r, sin_r = math.cos(r), math.sin(r)
-    return np.array([v[0]*cos_r - v[1]*sin_r, v[0]*sin_r + v[1]*cos_r])
-
-normals_b_aligned = np.array([tf_vec(n, rot) for n in normals_b_orig])
+normals_b_aligned = np.array([rotate_vector(n, rot) for n in normals_b_orig])
 
 piece_data = _load_piece_data(DEDUPED_PATH)
 outline_a = _get_outline(piece_data[PID_A])
-outline_b = [tf_pt(np.array(p), src_mid, tgt_mid, rot) for p in _get_outline(piece_data[PID_B])]
+outline_b = [transform_point(np.array(p), src_mid, tgt_mid, rot) for p in _get_outline(piece_data[PID_B])]
 corr_aligned_back = _apply_transform(corr_orig, src_mid, tgt_mid, rot)
 
 all_pts = outline_a + outline_b + [p.tolist() for p in sample_a] + [p.tolist() for p in corr_aligned_back]
-min_x = min(p[0] for p in all_pts)
-max_x = max(p[0] for p in all_pts)
-min_y = min(p[1] for p in all_pts)
-max_y = max(p[1] for p in all_pts)
-data_w = max_x - min_x
-data_h = max_y - min_y
-
-canvas_w = 1600
-margin = 80
-scale = min((canvas_w - 2*margin) / data_w, (900 - 2*margin) / data_h)
-canvas_h = int(data_h * scale) + 2*margin + 80
-
-def tc(x, y):
-    return ((x - min_x) * scale + margin, (y - min_y) * scale + margin + 50)
-
-canvas = Image.new('RGBA', (canvas_w, canvas_h), (30, 30, 30, 255))
-draw = ImageDraw.Draw(canvas)
+vp = CanvasViewport(all_pts, canvas_w=1600, target_h=900, margin=80, top_offset=50)
+tc = vp.tc
+draw = vp.draw
 
 draw.text((15, 8),
           f"Normal from own adjacent points (smoothed)  |  Blue=A normal  Red=B normal  Green=index",
@@ -164,10 +134,10 @@ for i in range(N_SAMPLES):
     bbx, bby = tc(band_b[0], band_b[1])
     draw.ellipse([bbx-3, bby-3, bbx+3, bby+3], fill=(255, 140, 140, 255))
 
-ly = canvas_h - 18
+ly = vp.canvas.size[1] - 18
 draw.text((15, ly), "Blue arrows=A normals  Red arrows=B normals  Dots=band positions  Green=index",
           fill=(200,200,200,255), font=fonts['tiny'])
 
 out_path = os.path.join(CHECK_PATH, f'normal_own_adj_{PID_A}_{PID_B}.png')
-canvas.save(out_path)
+vp.canvas.save(out_path)
 print(f"Saved: {out_path}")
