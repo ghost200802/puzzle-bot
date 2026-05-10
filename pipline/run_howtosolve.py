@@ -466,29 +466,30 @@ def generate_step_image(step_num, total_steps, pid, info,
     canvas = np.ones((total_h, total_w, 3), dtype=np.uint8) * 240
 
     cv2.rectangle(canvas, (0, 0), (total_w, header_h), (60, 60, 60), -1)
-    header_text = f"Step {step_num}/{total_steps}   Piece #{pid}   " \
-                  f"Row {info['gy']+1}, Col {info['gx']+1}   " \
-                  f"Rotation: {ROTATION_DESC.get(info['orientation'], '?')}"
+    src_part = f"  [{source_name}]" if source_name else ""
+    header_text = f"Step {step_num}/{total_steps}   Piece #{pid}{src_part}   " \
+                  f"Row {info['gy']+1}, Col {info['gx']+1}"
     cv2.putText(canvas, header_text, (15, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                 (255, 255, 255), 2, cv2.LINE_AA)
 
     left_x = 10
     right_x = panel_w + 20
+    panel_y = header_h
 
     if photo_img is not None:
         panel = fit_to_panel(photo_img, panel_w, panel_h)
-        canvas[header_h:header_h + panel_h, left_x:left_x + panel_w] = panel
-    photo_label = f"Source: {source_name}" if source_name else "Source Photo"
-    cv2.putText(canvas, photo_label, (left_x + 5, header_h - 5),
+        canvas[panel_y:panel_y + panel_h, left_x:left_x + panel_w] = panel
+    cv2.putText(canvas, "Source Photo" if source_name is None else source_name,
+                (left_x + 5, panel_y + 18),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
 
     if assembly_img is not None:
         panel = fit_to_panel(assembly_img, panel_w, panel_h)
-        canvas[header_h:header_h + panel_h, right_x:right_x + panel_w] = panel
-        cv2.putText(canvas, "Target Position", (right_x + 5, header_h - 5),
+        canvas[panel_y:panel_y + panel_h, right_x:right_x + panel_w] = panel
+        cv2.putText(canvas, "Target Position", (right_x + 5, panel_y + 18),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
 
-    footer_y = header_h + panel_h + 5
+    footer_y = panel_y + panel_h + 5
     cv2.rectangle(canvas, (0, footer_y), (total_w, total_h), (255, 255, 255), -1)
 
     if piece_thumb is not None:
@@ -502,8 +503,7 @@ def generate_step_image(step_num, total_steps, pid, info,
         canvas[ty:ty + thumb_size, tx:tx + thumb_size] = thumb
         cv2.rectangle(canvas, (tx, ty), (tx + thumb_size, ty + thumb_size), (0, 0, 0), 1)
 
-    info_text = f"Piece #{pid}   Position: Row {info['gy']+1}, Col {info['gx']+1}   " \
-                f"Rotation: {ROTATION_DESC.get(info['orientation'], '?')}"
+    info_text = f"Piece #{pid}   Position: Row {info['gy']+1}, Col {info['gx']+1}"
     cv2.putText(canvas, info_text, (90, footer_y + 45),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.55, (50, 50, 50), 1, cv2.LINE_AA)
 
@@ -642,7 +642,10 @@ def main():
             ov = photo_overlays[pid]
             base = accumulated_photo.get(ov['src'])
             if base is not None:
-                apply_mask_overlay(base, ov['bbox'], ov['mask'], (0, 200, 0), 0.3)
+                m = ov['mask'].astype(np.uint8)
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+                dilated = cv2.dilate(m, kernel, iterations=1) > 0
+                apply_mask_overlay(base, ov['bbox'], dilated, (0, 0, 0), 1.0)
 
         if accumulated_asm is not None and pid in asm_overlays:
             ov = asm_overlays[pid]
