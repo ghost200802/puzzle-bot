@@ -417,10 +417,11 @@ def draw_blue_outline(base, bbox, mask, thickness=8):
     if src_h <= 0 or src_w <= 0:
         return
     padded[dy:dy + src_h, dx:dx + src_w] = (mask[:src_h, :src_w] * 255).astype(np.uint8)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (thickness * 2 + 1, thickness * 2 + 1))
-    dilated = cv2.dilate(padded, kernel, iterations=1)
-    outer_ring = dilated > padded
-    base[y0c:y1c, x0c:x1c][outer_ring] = (255, 100, 0)
+    contours, _ = cv2.findContours(padded, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contour_mask = np.zeros_like(padded)
+    cv2.drawContours(contour_mask, contours, -1, 255, thickness)
+    outer_only = (contour_mask > 0) & (padded == 0)
+    base[y0c:y1c, x0c:x1c][outer_only] = (255, 100, 0)
 
 
 def apply_mask_overlay(base, bbox, mask, color_bgr, alpha):
