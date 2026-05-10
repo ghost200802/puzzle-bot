@@ -527,6 +527,44 @@ def fit_to_panel(img, panel_w, panel_h):
     return result
 
 
+def load_dup_groups(output_dir):
+    parents = {}
+    def find(x):
+        while parents.get(x, x) != x:
+            parents[x] = parents.get(parents[x], parents[x])
+            x = parents[x]
+        return x
+    def union(a, b):
+        a, b = find(a), find(b)
+        if a != b:
+            parents[b] = a
+
+    meta_path = os.path.join(output_dir, 'check', 'dedup_match_meta.json')
+    if not os.path.exists(meta_path):
+        return {}
+    with open(meta_path, 'r') as f:
+        meta = json.load(f)
+    all_ids = set()
+    for key, val in meta.items():
+        if not val.get('confirmed'):
+            continue
+        parts = key.split('_')
+        a, b = int(parts[0]), int(parts[1])
+        union(a, b)
+        all_ids.add(a)
+        all_ids.add(b)
+
+    dup_map = {}
+    groups = {}
+    for pid in all_ids:
+        root = find(pid)
+        groups.setdefault(root, []).append(pid)
+    for members in groups.values():
+        for pid in members:
+            dup_map[pid] = [m for m in members if m != pid]
+    return dup_map
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Generate step-by-step puzzle assembly guide images')
@@ -560,6 +598,10 @@ def main():
         origins = json.load(f)
 
     ensure_assembly_positions(output_dir, targeted_dir)
+
+    print("Loading dedup groups...")
+    dup_map = load_dup_groups(output_dir)
+    print(f"  {len(dup_map)} pieces have duplicates")
 
     print("Loading photo overlays...")
     photos, photo_overlays = make_photo_overlays(origins, input_dir, bmp_dir)
@@ -638,14 +680,16 @@ def main():
                             photo_img, assembly_step, piece_thumb, output_dir,
                             source_name=current_src)
 
-        if pid in photo_overlays:
-            ov = photo_overlays[pid]
-            base = accumulated_photo.get(ov['src'])
-            if base is not None:
-                m = ov['mask'].astype(np.uint8)
-                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
-                dilated = cv2.dilate(m, kernel, iterations=1) > 0
-                apply_mask_overlay(base, ov['bbox'], dilated, (0, 0, 0), 1.0)
+        pids_to_cover = [pid] + dup_map.get(pid, [])
+        for cpid in pids_to_cover:
+            if cpid in photo_overlays:
+                cov = photo_overlays[cpid]
+                cov_base = accumulated_photo.get(cov['src'])
+                if cov_base is not None:
+                    m = cov['mask'].astype(np.uint8)
+                    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+                    dilated = cv2.dilate(m, kernel, iterations=1) > 0
+                    apply_mask_overlay(cov_base, cov['bbox'], dilated, (0, 0, 0), 1.0)
 
         if accumulated_asm is not None and pid in asm_overlays:
             ov = asm_overlays[pid]
