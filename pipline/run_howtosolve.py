@@ -285,6 +285,26 @@ def make_assembly_overlays(assembly_img, asm_positions):
     return overlays
 
 
+def draw_blue_outline(base, bbox, mask, thickness=8):
+    x0, y0, x1, y1 = bbox
+    h, w = base.shape[:2]
+    x0c = max(0, x0)
+    y0c = max(0, y0)
+    x1c = min(w, x1)
+    y1c = min(h, y1)
+    if x1c <= x0c or y1c <= y0c:
+        return
+    sx = x0c - x0
+    sy = y0c - y0
+    ex = sx + (x1c - x0c)
+    ey = sy + (y1c - y0c)
+    local_mask = mask[sy:ey, sx:ex]
+    contours, _ = cv2.findContours(
+        local_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    offset_contours = [c + np.array([x0c, y0c]) for c in contours]
+    cv2.drawContours(base, offset_contours, -1, (255, 100, 0), thickness)
+
+
 def apply_mask_overlay(base, bbox, mask, color_bgr, alpha):
     x0, y0, x1, y1 = bbox
     h, w = base.shape[:2]
@@ -315,7 +335,8 @@ def apply_mask_overlay(base, bbox, mask, color_bgr, alpha):
 
 
 def generate_step_image(step_num, total_steps, pid, info,
-                        photo_img, assembly_img, piece_thumb, output_dir):
+                        photo_img, assembly_img, piece_thumb, output_dir,
+                        source_name=None):
     panel_w = 700
     panel_h = 800
     header_h = 50
@@ -338,8 +359,9 @@ def generate_step_image(step_num, total_steps, pid, info,
     if photo_img is not None:
         panel = fit_to_panel(photo_img, panel_w, panel_h)
         canvas[header_h:header_h + panel_h, left_x:left_x + panel_w] = panel
-        cv2.putText(canvas, "Source Photo", (left_x + 5, header_h - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
+    photo_label = f"Source: {source_name}" if source_name else "Source Photo"
+    cv2.putText(canvas, photo_label, (left_x + 5, header_h - 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1, cv2.LINE_AA)
 
     if assembly_img is not None:
         panel = fit_to_panel(assembly_img, panel_w, panel_h)
@@ -466,19 +488,20 @@ def main():
             print(f"  [{step_num}/{total}] {elapsed:.1f}s elapsed, ETA {eta:.1f}s")
 
         photo_img = None
+        current_src = None
         if pid in photo_overlays:
             ov = photo_overlays[pid]
-            src = ov['src']
-            base = accumulated_photo.get(src)
+            current_src = ov['src']
+            base = accumulated_photo.get(current_src)
             if base is not None:
                 photo_img = base.copy()
-                apply_mask_overlay(photo_img, ov['bbox'], ov['mask'], (0, 220, 0), 0.4)
+                draw_blue_outline(photo_img, ov['bbox'], ov['mask'], 8)
 
         assembly_step = None
         if accumulated_asm is not None and pid in asm_overlays:
             assembly_step = accumulated_asm.copy()
             ov = asm_overlays[pid]
-            apply_mask_overlay(assembly_step, ov['bbox'], ov['mask'], (0, 220, 0), 0.4)
+            draw_blue_outline(assembly_step, ov['bbox'], ov['mask'], 8)
 
         piece_thumb = None
         p = os.path.join(color_dir, f'piece_{pid}.png')
@@ -486,17 +509,18 @@ def main():
             piece_thumb = cv2.imread(p, cv2.IMREAD_UNCHANGED)
 
         generate_step_image(step_num, total, pid, info,
-                            photo_img, assembly_step, piece_thumb, output_dir)
+                            photo_img, assembly_step, piece_thumb, output_dir,
+                            source_name=current_src)
 
         if pid in photo_overlays:
             ov = photo_overlays[pid]
             base = accumulated_photo.get(ov['src'])
             if base is not None:
-                apply_mask_overlay(base, ov['bbox'], ov['mask'], (40, 40, 40), 0.65)
+                apply_mask_overlay(base, ov['bbox'], ov['mask'], (0, 200, 0), 0.3)
 
         if accumulated_asm is not None and pid in asm_overlays:
             ov = asm_overlays[pid]
-            apply_mask_overlay(accumulated_asm, ov['bbox'], ov['mask'], (180, 180, 180), 0.3)
+            apply_mask_overlay(accumulated_asm, ov['bbox'], ov['mask'], (0, 200, 0), 0.3)
 
     elapsed = time.time() - t0
     howtosolve_dir = os.path.join(output_dir, 'howtosolve')
