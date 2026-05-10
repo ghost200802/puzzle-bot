@@ -961,6 +961,76 @@ class TargetedSolver:
         cv2.imwrite(path2, vis)
         print(f"  Saved {path2} ({len(missing)} missing: {missing})")
 
+    def _save_piece_positions(self, output_dir):
+        if not self._orig_transforms or not self._orig_canvas_info:
+            return
+        ci = self._orig_canvas_info
+        min_x, min_y = ci['min_x'], ci['min_y']
+        max_x, max_y = ci['max_x'], ci['max_y']
+        data_w = max_x - min_x
+        data_h = max_y - min_y
+        if data_w == 0 or data_h == 0:
+            return
+        margin = max(data_w, data_h) * 0.05
+        canvas_w = int(data_w + 2 * margin)
+        canvas_h = int(data_h + 2 * margin) + 60
+        max_size = 12000
+        if max(canvas_w, canvas_h) > max_size:
+            img_scale = max_size / max(canvas_w, canvas_h)
+        else:
+            img_scale = 1.0
+        header_h = 60
+
+        positions = {}
+        for pid, (rotation, translation, ic) in self._orig_transforms.items():
+            cos_r = math.cos(rotation)
+            sin_r = math.sin(rotation)
+            img_path = os.path.join(self.color_dir, f'piece_{pid}.png')
+            if not os.path.exists(img_path):
+                continue
+            from PIL import Image as PILImage
+            piece_img = PILImage.open(img_path)
+            w_img, h_img = piece_img.size
+            corners = [(0, 0), (w_img, 0), (w_img, h_img), (0, h_img)]
+            all_pts = []
+            for cx, cy in corners:
+                dx = cx - ic[0]
+                dy = cy - ic[1]
+                ox = dx * cos_r - dy * sin_r + ic[0] + translation[0]
+                oy = dx * sin_r + dy * cos_r + ic[1] + translation[1]
+                all_pts.append((ox, oy))
+            bx0 = min(p[0] for p in all_pts)
+            by0 = min(p[1] for p in all_pts)
+            bx1 = max(p[0] for p in all_pts)
+            by1 = max(p[1] for p in all_pts)
+
+            px0 = (bx0 - min_x + margin) * img_scale
+            py0 = (by0 - min_y + margin) * img_scale + header_h
+            px1 = (bx1 - min_x + margin) * img_scale
+            py1 = (by1 - min_y + margin) * img_scale + header_h
+
+            positions[str(pid)] = {
+                'bbox': [px0, py0, px1, py1],
+                'rotation': rotation,
+                'translation': list(translation),
+                'incenter': list(ic),
+                'img_scale': img_scale,
+            }
+
+        canvas_info = {
+            'min_x': min_x, 'min_y': min_y,
+            'max_x': max_x, 'max_y': max_y,
+            'margin': margin, 'img_scale': img_scale,
+            'header_h': header_h,
+            'canvas_w': int(canvas_w * img_scale),
+            'canvas_h': int(canvas_h * img_scale),
+            'rotation_back': self.best_rotation,
+        }
+
+        with open(os.path.join(output_dir, 'piece_assembly_positions.json'), 'w') as f:
+            json.dump({'positions': positions, 'canvas_info': canvas_info}, f, indent=2)
+        print(f"  Saved piece assembly positions ({len(positions)} pieces)")
+
     def save_results(self):
         output_dir = os.path.join(os.path.dirname(self.solution_dir), 'targeted_solve')
         os.makedirs(output_dir, exist_ok=True)
@@ -999,6 +1069,8 @@ class TargetedSolver:
         with open(os.path.join(output_dir, 'targeted_solve_report.json'), 'w') as f:
             json.dump(report, f, indent=2)
         print(f"  Saved report to {output_dir}")
+
+        self._save_piece_positions(output_dir)
 
 
 def main():

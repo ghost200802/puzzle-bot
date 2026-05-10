@@ -1,4 +1,4 @@
-import os, sys, numpy as np, cv2
+import os, sys, json, numpy as np, cv2
 from PIL import Image
 from scipy.ndimage import label as ndlabel
 
@@ -205,6 +205,9 @@ def segment_image(image_path, target_size=PHONE_TARGET_PIECE_SIZE):
             'centroid': ((px0 + px1) / 2.0, (py0 + py1) / 2.0),
             'area': int(np.sum(smooth_binary)),
             'target_size': (new_w, new_h),
+            'tight_bbox': (int(x0), int(y0), int(x1), int(y1)),
+            'crop_size': (int(px1 - px0), int(py1 - py0)),
+            'scale_factor': float(scale_factor),
         })
 
     return pieces
@@ -275,6 +278,21 @@ def main():
         save_island_as_bmp(p['binary'], bmp_path)
         color_path = os.path.join(color_dir, f'piece_{pid}.png')
         Image.fromarray(p['color_rgba'], mode='RGBA').save(color_path)
+
+    origins = {}
+    for p in all_pieces:
+        origins[str(p['id'])] = {
+            'source_file': p['source_file'],
+            'tight_bbox': list(p['tight_bbox']),
+            'origin': list(p['origin']),
+            'crop_size': list(p['crop_size']),
+            'target_size': list(p['target_size']),
+            'scale_factor': p['scale_factor'],
+        }
+    origins_path = os.path.join(OUTPUT_ROOT, 'piece_origins.json')
+    with open(origins_path, 'w') as f:
+        json.dump(origins, f, indent=2)
+    print(f"  Saved piece origins to {origins_path}")
 
     # Analysis
     print(f"\n{'='*60}")
