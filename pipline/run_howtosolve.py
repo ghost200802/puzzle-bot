@@ -27,6 +27,10 @@ ROTATION_DESC = {
     3: "90\u00b0 counter-clockwise",
 }
 
+PANEL_W = 700
+PANEL_H = 800
+OUTLINE_PX = 8
+
 
 def load_solution(solution_dir):
     with open(os.path.join(solution_dir, 'solution_grid.txt'), 'r') as f:
@@ -176,6 +180,7 @@ def ensure_assembly_positions(output_dir, targeted_dir):
             'translation': list(translation),
             'incenter': list(ic),
             'img_scale': img_scale,
+            'raw_bbox': [px0, py0, px1, py1],
         }
 
     rotation_back = 0
@@ -190,7 +195,7 @@ def ensure_assembly_positions(output_dir, targeted_dir):
 
     if rotation_back != 0:
         for pid_str, pos in positions.items():
-            pos['bbox'] = _rotate_bbox(pos['bbox'], cw, ch, rotation_back)
+            pos['bbox'] = _rotate_bbox(pos['raw_bbox'], cw, ch, rotation_back)
         if rotation_back in [1, 3]:
             cw, ch = ch, cw
 
@@ -261,48 +266,161 @@ def make_photo_overlays(origins, input_dir, bmp_dir):
     return photos, overlays
 
 
-def make_assembly_overlays(assembly_img, asm_positions):
-    h, w = assembly_img.shape[:2]
+def _pil_affine_transform_mask(mask_pil, rotation, translation, ic, img_scale,
+                               min_x, min_y, margin, header_h, raw_cw, raw_ch,
+                               rotation_back, asm_w, asm_h, bbox):
+    cos_r = math.cos(rotation)
+    sin_r = math.sin(rotation)
+    w_bmp, h_bmp = mask_pil.size
+
+    corners = [(0, 0), (w_bmp, 0), (w_bmp, h_bmp), (0, h_bmp)]
+    img_pts = []
+    for cx, cy in corners:
+        ddx = cx - ic[0]
+        ddy = cy - ic[1]
+        ox = ddx * cos_r - ddy * sin_r + ic[0] + translation[0]
+        oy = ddx * sin_r + ddy * cos_r + ic[1] + translation[1]
+        img_pts.append((ox, oy))
+
+    img_min_x = min(p[0] for p in img_pts)
+    img_min_y = min(p[1] for p in img_pts)
+    img_max_x = max(p[0] for p in img_pts)
+    img_max_y = max(p[1] for p in img_pts)
+
+    out_w = int(math.ceil((img_max_x - img_min_x) * img_scale)) + 2
+    out_h = int(math.ceil((img_max_y - img_min_y) * img_scale)) + 2
+    if out_w <= 0 or out_h <= 0:
+        return None
+
+    cos_neg = math.cos(-rotation)
+    sin_neg = math.sin(-rotation)
+    sm_x = (img_min_x - ic[0] - translation[0]) * img_scale
+    sm_y = (img_min_y - ic[1] - translation[1]) * img_scale
+
+    a = cos_neg * img_scale
+    b = -sin_neg * img_scale
+    c = cos_neg * sm_x - sin_neg * sm_y + ic[0]
+    d = sin_neg * img_scale
+    e = cos_neg * img_scale
+    f = sin_neg * sm_x + cos_neg * sm_y + ic[1]
+
+    from PIL import Image as PILImage
+    transformed = mask_pil.transform(
+        (out_w, out_h), PILImage.AFFINE,
+        (a, b, c, d, e, f),
+        resample=PILImage.NEAREST,
+    )
+    paste_x = int((img_min_x - min_x + margin) * img_scale)
+    paste_y = int((img_min_y - min_y + margin) * img_scale + header_h)
+
+    piece_canvas = np.zeros((raw_ch, raw_cw), dtype=np.uint8)
+    mask_arr = np.array(transformed)
+    mh, mw = mask_arr.shape
+    y1 = min(paste_y + mh, raw_ch)
+    x1 = min(paste_x + mw, raw_cw)
+    sy = max(0, -paste_y)
+    sx = max(0, -paste_x)
+    if y1 > paste_y + sy and x1 > paste_x + sx:
+        piece_canvas[paste_y + sy:y1, paste_x + sx:x1] = \
+            mask_arr[sy:y1 - paste_y, sx:x1 - paste_x]
+
+    if rotation_back != 0:
+        rot_codes = {
+            1: cv2.ROTATE_90_COUNTERCLOCKWISE,
+            2: cv2.ROTATE_180,
+            3: cv2.ROTATE_90_CLOCKWISE,
+        }
+        piece_canvas = cv2.rotate(piece_canvas, rot_codes[rotation_back])
+
+    x0 = max(0, int(round(bbox[0])))
+    y0 = max(0, int(round(bbox[1])))
+    x1b = min(asm_w, int(round(bbox[2])))
+    y1b = min(asm_h, int(round(bbox[3])))
+    if x1b <= x0 or y1b <= y0:
+        return None
+    return piece_canvas[y0:y1b, x0:x1b] > 127
+
+
+def make_assembly_overlays(assembly_img, asm_positions, bmp_dir, canvas_info):
+    from PIL import Image as PILImage
+
+    asm_h, asm_w = assembly_img.shape[:2]
+    min_x = canvas_info.get('min_x', 0)
+    min_y = canvas_info.get('min_y', 0)
+    margin = canvas_info.get('margin', 0)
+    header_h = canvas_info.get('header_h', 60)
+    img_scale = canvas_info.get('img_scale', 1.0)
+    rotation_back = canvas_info.get('rotation_back', 0)
+
+    raw_cw = int((canvas_info.get('max_x', 0) - min_x + 2 * margin) * img_scale)
+    raw_ch = int((canvas_info.get('max_y', 0) - min_y + 2 * margin) * img_scale + header_h)
+
     overlays = {}
-    for pid_str, pos in asm_positions.items():
+    total = len(asm_positions)
+    for idx, (pid_str, pos) in enumerate(asm_positions.items()):
         pid = int(pid_str)
+        if (idx + 1) % 20 == 0 or idx + 1 == total:
+            print(f"    assembly mask [{idx+1}/{total}]")
+
+        bmp_path = os.path.join(bmp_dir, f'piece_{pid}.bmp')
+        if not os.path.exists(bmp_path):
+            continue
+
+        bmp = cv2.imread(bmp_path, cv2.IMREAD_GRAYSCALE)
+        mask_pil = PILImage.fromarray(bmp)
+
+        local_mask = _pil_affine_transform_mask(
+            mask_pil, pos['rotation'], tuple(pos['translation']),
+            tuple(pos['incenter']), img_scale,
+            min_x, min_y, margin, header_h,
+            raw_cw, raw_ch, rotation_back,
+            asm_w, asm_h, pos['bbox'],
+        )
+        if local_mask is None:
+            continue
+
         bbox = pos['bbox']
         x0 = max(0, int(round(bbox[0])))
         y0 = max(0, int(round(bbox[1])))
-        x1 = min(w, int(round(bbox[2])))
-        y1 = min(h, int(round(bbox[3])))
-        if x1 <= x0 or y1 <= y0:
-            continue
-
-        roi = assembly_img[y0:y1, x0:x1]
-        roi_mask = np.any(roi != 255, axis=2)
+        x1 = min(asm_w, int(round(bbox[2])))
+        y1 = min(asm_h, int(round(bbox[3])))
 
         overlays[pid] = {
             'bbox': (x0, y0, x1, y1),
-            'mask': roi_mask,
+            'mask': local_mask,
         }
 
     return overlays
 
 
+def panel_scale(img_h, img_w):
+    return min(PANEL_W / img_w, PANEL_H / img_h)
+
+
 def draw_blue_outline(base, bbox, mask, thickness=8):
     x0, y0, x1, y1 = bbox
     h, w = base.shape[:2]
-    x0c = max(0, x0)
-    y0c = max(0, y0)
-    x1c = min(w, x1)
-    y1c = min(h, y1)
+    pad = thickness + 2
+    x0c = max(0, x0 - pad)
+    y0c = max(0, y0 - pad)
+    x1c = min(w, x1 + pad)
+    y1c = min(h, y1 + pad)
     if x1c <= x0c or y1c <= y0c:
         return
-    sx = x0c - x0
-    sy = y0c - y0
-    ex = sx + (x1c - x0c)
-    ey = sy + (y1c - y0c)
-    local_mask = mask[sy:ey, sx:ex]
-    contours, _ = cv2.findContours(
-        local_mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    offset_contours = [c + np.array([x0c, y0c]) for c in contours]
-    cv2.drawContours(base, offset_contours, -1, (255, 100, 0), thickness)
+    bw = x1 - x0
+    bh = y1 - y0
+    padded = np.zeros((y1c - y0c, x1c - x0c), dtype=np.uint8)
+    dy = y0 - y0c
+    dx = x0 - x0c
+    src_h = min(bh, y1c - y0)
+    src_w = min(bw, x1c - x0)
+    if src_h <= 0 or src_w <= 0:
+        return
+    padded[dy:dy + src_h, dx:dx + src_w] = (mask[:src_h, :src_w] * 255).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (thickness * 2 + 1, thickness * 2 + 1))
+    dilated = cv2.dilate(padded, kernel, iterations=1)
+    outer_ring = dilated > padded
+    base[y0c:y1c, x0c:x1c][outer_ring] = (255, 100, 0)
 
 
 def apply_mask_overlay(base, bbox, mask, color_bgr, alpha):
@@ -460,12 +578,13 @@ def main():
         with open(asm_pos_path, 'r') as f:
             asm_data = json.load(f)
         asm_positions = asm_data.get('positions', {})
+        canvas_info = asm_data.get('canvas_info', {})
         print(f"Loaded assembly positions: {len(asm_positions)} pieces")
 
     print("Computing assembly overlays...")
     asm_overlays = {}
     if assembly_img is not None and asm_positions:
-        asm_overlays = make_assembly_overlays(assembly_img, asm_positions)
+        asm_overlays = make_assembly_overlays(assembly_img, asm_positions, bmp_dir, canvas_info)
         print(f"  {len(asm_overlays)} assembly masks ready")
 
     ordered = get_ordered_pieces(placed, pw, ph)
@@ -479,6 +598,9 @@ def main():
         accumulated_photo[src] = base.copy()
 
     accumulated_asm = assembly_img.copy() if assembly_img is not None else None
+
+    photo_thickness_cache = {}
+    asm_thickness = max(2, int(OUTLINE_PX / panel_scale(assembly_img.shape[0], assembly_img.shape[1]))) if accumulated_asm is not None else 8
 
     for i, (pid, info) in enumerate(ordered):
         step_num = i + 1
@@ -495,13 +617,16 @@ def main():
             base = accumulated_photo.get(current_src)
             if base is not None:
                 photo_img = base.copy()
-                draw_blue_outline(photo_img, ov['bbox'], ov['mask'], 8)
+                if current_src not in photo_thickness_cache:
+                    ph, pw = base.shape[:2]
+                    photo_thickness_cache[current_src] = max(2, int(OUTLINE_PX / panel_scale(ph, pw)))
+                draw_blue_outline(photo_img, ov['bbox'], ov['mask'], photo_thickness_cache[current_src])
 
         assembly_step = None
         if accumulated_asm is not None and pid in asm_overlays:
             assembly_step = accumulated_asm.copy()
             ov = asm_overlays[pid]
-            draw_blue_outline(assembly_step, ov['bbox'], ov['mask'], 8)
+            draw_blue_outline(assembly_step, ov['bbox'], ov['mask'], asm_thickness)
 
         piece_thumb = None
         p = os.path.join(color_dir, f'piece_{pid}.png')
