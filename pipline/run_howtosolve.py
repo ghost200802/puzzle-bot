@@ -509,7 +509,9 @@ def generate_step_image(step_num, total_steps, pid, info,
 
     out_dir = os.path.join(output_dir, 'howtosolve')
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f'step_{step_num:04d}_piece_{pid}.png')
+    row_1 = info['gy'] + 1
+    col_1 = info['gx'] + 1
+    out_path = os.path.join(out_dir, f'r{row_1:02d}_c{col_1:02d}_piece_{pid}.png')
     cv2.imwrite(out_path, canvas)
 
 
