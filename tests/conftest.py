@@ -10,6 +10,8 @@ from tests.helpers import create_synthetic_piece_bmp
 
 PROJECT_ROOT = os.path.join(os.path.dirname(__file__), '..')
 
+collect_ignore = ['diagnostics']
+
 
 @pytest.fixture
 def src_path():
